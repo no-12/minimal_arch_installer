@@ -16,10 +16,6 @@ declare efi_part
 declare swap_part
 declare root_part
 
-declare -A states
-declare -i current_state=0
-declare -i wizard_step_exit_code=0
-
 
 print_h0() {
     echo -e "\e[42m==> $1\e[0m"
@@ -337,7 +333,7 @@ ask_confirm() {
 }
 
 
-run() {
+do_transition() {
     ${states[$current_state]}
     if (( $wizard_step_exit_code == 0 )); then
         ((current_state++))
@@ -346,18 +342,27 @@ run() {
     else
         exit
     fi
-    run
+    do_transition
 }
 
 
-states[0]=init_message
-states[1]=ask_disk
-states[2]=ask_hostname
-states[3]=ask_username
-states[4]=ask_timezone
-states[5]=ask_additional_packages
-states[6]=ask_confirm
-states[7]=install_arch
-states[8]=exit
+run() {
+    local -A states
+    states[0]=init_message
+    states[1]=ask_disk
+    states[2]=ask_hostname
+    states[3]=ask_username
+    states[4]=ask_timezone
+    states[5]=ask_additional_packages
+    states[6]=ask_confirm
+    states[7]=install_arch
+    states[8]=exit
+
+    local -i current_state=0
+    local -i wizard_step_exit_code=0
+
+    do_transition
+}
+
 
 run
