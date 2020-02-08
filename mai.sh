@@ -325,7 +325,7 @@ ask_confirm() {
     local config_list
     config_list=$(check_config)
     local config_check_return_code=$?
-    whiptail --yesno "All parameters must be set\n\n$config_list" $DIALOG_SIZE --title "Confirm" --yes-button "Start installation" --no-button $BACK_BUTTON_TEXT
+    whiptail --yesno "All parameters must be set\n\n$config_list" $DIALOG_SIZE --title "Confirm" --defaultno --yes-button "Start installation" --no-button $BACK_BUTTON_TEXT
     wizard_step_exit_code=$?
     if (( $wizard_step_exit_code == 0 && $config_check_return_code == $INVALID_CONFIG_RETURN_CODE)); then
         ask_confirm
