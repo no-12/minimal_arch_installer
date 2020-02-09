@@ -184,7 +184,13 @@ create_user() {
 
 set_user_password() {
     print_h0 "Please enter password for ${config[USERNAME]}"
-    arch-chroot /mnt passwd "${config[USERNAME]}"
+    set +e
+    local -i password_is_set=1
+    until [ $password_is_set -eq 0 ]; do
+        arch-chroot /mnt passwd "${config[USERNAME]}"
+        password_is_set=$?
+    done
+    set -e
 }
 
 finalize_installation() {
