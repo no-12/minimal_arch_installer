@@ -2,8 +2,23 @@
 
 self contained installer written in bash
 
-boot the Arch Linux live image and run the installer with:
-
+boot the Arch Linux live image and run the wizard with:
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh)
 ```
+
+the wizard will ask for the following parameters:
+```bash
+DISK
+HOSTNAME
+USERNAME
+TIMEZONE
+ADDITIONAL_PACKAGES
+```
+
+the paramaters can be set via environment variables prefixed with 'MAI_'. For example:
+```bash
+MAI_DISK=/dev/sda bash <(curl -s https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh)
+```
+
+to skip the wizard set an environment variable MAI_SKIP_WIZARD=true

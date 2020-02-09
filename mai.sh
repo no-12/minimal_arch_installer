@@ -4,12 +4,14 @@ declare -r INVALID_CONFIG_RETURN_CODE=64
 declare -ar DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
 
+declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:=false}
+
 declare -A config
-config[DISK]=${DISK}
-config[ARCH_HOSTNAME]=${ARCH_HOSTNAME}
-config[USERNAME]=${USERNAME}
-config[TIMEZONE]=${TIMEZONE:="Europe/Berlin"}
-config[ADDITIONAL_PACKAGES]=${ADDITIONAL_PACKAGES:="git ansible"}
+config[DISK]=${MAI_DISK}
+config[HOSTNAME]=${MAI_HOSTNAME}
+config[USERNAME]=${MAI_USERNAME}
+config[TIMEZONE]=${MAI_TIMEZONE:="Europe/Berlin"}
+config[ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:="git ansible"}
 
 declare efi_part
 declare swap_part
@@ -117,7 +119,7 @@ generate_fstab() {
 
 generate_host_files() {
     print_h0 "Generate host files"
-    generate_file /etc/hostname "${config[ARCH_HOSTNAME]}\\n"
+    generate_file /etc/hostname "${config[HOSTNAME]}\\n"
     generate_file /etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
 }
 
@@ -276,7 +278,7 @@ ask_disk() {
 }
 
 ask_hostname() {
-    dialog_wrapper ARCH_HOSTNAME "$(inputbox "Hostname" "" "${config[ARCH_HOSTNAME]}" 3>&1 1>&2 2>&3)"
+    dialog_wrapper HOSTNAME "$(inputbox "Hostname" "" "${config[HOSTNAME]}" 3>&1 1>&2 2>&3)"
 }
 
 ask_username() {
@@ -309,7 +311,7 @@ ask_confirm() {
 }
 
 do_transition() {
-    eval "${states[$current_state]}"
+    ${states[$current_state]}
     if ((wizard_step_exit_code == 0)); then
         ((current_state++))
     elif ((wizard_step_exit_code == 1)); then
@@ -330,11 +332,14 @@ run() {
     states[5]=ask_timezone
     states[6]=ask_additional_packages
     states[7]=ask_confirm
-    states[8]=install_arch
-    states[9]="exit"
+    states[8]="install_arch && exit"
 
-    local -i current_state=1
     local -i wizard_step_exit_code=0
+    local -i current_state=1
+
+    if [[ $SKIP_WIZARD == true ]]; then
+        current_state=8
+    fi
 
     do_transition
 }
