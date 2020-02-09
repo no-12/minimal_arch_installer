@@ -4,7 +4,6 @@ declare -r INVALID_CONFIG_RETURN_CODE=64
 declare -r DIALOG_SIZE="30 78"
 declare -r BACK_BUTTON_TEXT=Back
 
-
 declare -A config
 config[DISK]=${DISK}
 config[ARCH_HOSTNAME]=${ARCH_HOSTNAME}
@@ -16,16 +15,13 @@ declare efi_part
 declare swap_part
 declare root_part
 
-
 print_h0() {
     echo -e "\e[42m==> $1\e[0m"
 }
 
-
 print_h1() {
     echo -e "\e[44m===> $1\e[0m"
 }
-
 
 generate_file() {
     local path=$1
@@ -33,7 +29,6 @@ generate_file() {
     print_h1 "Generate $path"
     echo -e $content | tee /mnt$path
 }
-
 
 check_config() {
     local return_code=0
@@ -49,7 +44,6 @@ check_config() {
     return $return_code
 }
 
-
 check_and_init() {
     print_h0 "Check Config"
     check_config
@@ -59,12 +53,10 @@ check_and_init() {
     root_part=/dev/${config[DISK]}3
 }
 
-
 update_systemclock() {
     print_h0 "Update system clock"
     timedatectl set-ntp true
 }
-
 
 partition_disk() {
     print_h0 "Partition disk ${config[DISK]}"
@@ -88,13 +80,11 @@ partition_disk() {
         mkpart primary ext4 ${swap_end}MiB 100%
 }
 
-
 format_partitions() {
     print_h0 "Format partitions"
     mkfs.fat -F32 $efi_part
     mkfs.ext4 -F $root_part
 }
-
 
 mount_partitions() {
     print_h0 "Mount partitions"
@@ -105,19 +95,16 @@ mount_partitions() {
     mount $efi_part /mnt/boot
 }
 
-
 unmount_partitions() {
     print_h0 "Unmount partitions"
     umount $efi_part
     umount $root_part
 }
 
-
 create_swap() {
     print_h0 "Create swap partition"
     mkswap $swap_part
 }
-
 
 install_base_packages() {
     print_h0 "Install base packages"
@@ -126,15 +113,13 @@ install_base_packages() {
     pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager $ADDITIONAL_PACKAGES
 }
 
-
 generate_fstab() {
     print_h0 "Generate fstab file"
     swapon $swap_part
-    genfstab -U /mnt > /mnt/etc/fstab
+    genfstab -U /mnt >/mnt/etc/fstab
     cat /mnt/etc/fstab
     swapoff $swap_part
 }
-
 
 generate_host_files() {
     print_h0 "Generate host files"
@@ -142,19 +127,16 @@ generate_host_files() {
     generate_file /etc/hosts "127.0.0.1\tlocalhost\n::1\t\tlocalhost\n"
 }
 
-
 enable_networkmanager_service() {
     print_h0 "Enable NetworkManager service"
     arch-chroot /mnt systemctl enable NetworkManager.service
 }
-
 
 set_timezone() {
     print_h0 "Set timezone to ${config[TIMEZONE]}"
     arch-chroot /mnt ln -sf /usr/share/zoneinfo/${config[TIMEZONE]} /etc/localtime
     arch-chroot /mnt hwclock --systohc
 }
-
 
 set_locale() {
     print_h0 "Set locale"
@@ -163,10 +145,9 @@ set_locale() {
     arch-chroot /mnt locale-gen
 }
 
-
 generate_sudoers_file() {
     print_h0 "Generate /etc/sudoers"
-    tee << EOF /mnt/etc/sudoers
+    tee /mnt/etc/sudoers <<EOF
 Defaults    env_reset
 Defaults    secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -176,7 +157,6 @@ root    ALL=(ALL:ALL) ALL
 EOF
 }
 
-
 install_bootloader() {
     print_h0 "Install bootloader"
     arch-chroot /mnt bootctl --path=/boot install
@@ -185,7 +165,7 @@ install_bootloader() {
     root_partuuid=$(blkid -s PARTUUID -o value $root_part)
 
     print_h1 "Generate /boot/loader/entries/arch.conf"
-    tee << EOF /mnt/boot/loader/entries/arch.conf
+    tee /mnt/boot/loader/entries/arch.conf <<EOF
 title   Arch Linux
 linux   /vmlinuz-linux
 initrd  /initramfs-linux.img
@@ -194,7 +174,7 @@ options root=PARTUUID=${root_partuuid} rw
 EOF
 
     print_h1 "Generate /boot/loader/loader.conf"
-    tee << EOF /mnt/boot/loader/loader.conf
+    tee /mnt/boot/loader/loader.conf <<EOF
 default arch
 timeout 0
 console-mode max
@@ -203,7 +183,6 @@ editor no
 EOF
 }
 
-
 create_user() {
     print_h0 "Create user: ${config[USERNAME]}"
     arch-chroot /mnt useradd -m -G wheel ${config[USERNAME]}
@@ -211,12 +190,10 @@ create_user() {
     arch-chroot /mnt passwd ${config[USERNAME]}
 }
 
-
 lock_root_login() {
     print_h0 "Lock root login"
     arch-chroot /mnt passwd -l root
 }
-
 
 install_arch() {
     set -e
@@ -245,11 +222,9 @@ install_arch() {
     print_h0 "Installation finished"
 }
 
-
 ################################
 # wizard stuff
 ################################
-
 
 radiolist() {
     local title=$1
@@ -259,14 +234,12 @@ radiolist() {
     whiptail --radiolist "${text}" $DIALOG_SIZE 20 --title "${title}" --cancel-button $BACK_BUTTON_TEXT ${@}
 }
 
-
 inputbox() {
     local title=$1
     local text=$2
     local default_value=$3
     whiptail --inputbox "${text}" $DIALOG_SIZE "${default_value}" --title "${title}" --cancel-button $BACK_BUTTON_TEXT
 }
-
 
 dialog_wrapper() {
     wizard_step_exit_code=$?
@@ -277,12 +250,10 @@ dialog_wrapper() {
     fi
 }
 
-
 init_message() {
     whiptail --msgbox "Bash script to install Arch" $DIALOG_SIZE --title "Minimal Arch Installer"
     wizard_step_exit_code=$?
 }
-
 
 ask_disk() {
     local disks
@@ -294,16 +265,13 @@ ask_disk() {
     dialog_wrapper DISK $(radiolist "Disk" "The install script will create 3 partitions (efi, root and swap) on the seleceted disk. The swap partition will be the same size as RAM.\n\nAll data on the disk will be lost forever." "${disks[@]}" 3>&1 1>&2 2>&3)
 }
 
-
 ask_hostname() {
     dialog_wrapper ARCH_HOSTNAME $(inputbox "Hostname" "" "${config[ARCH_HOSTNAME]}" 3>&1 1>&2 2>&3)
 }
 
-
 ask_username() {
     dialog_wrapper USERNAME $(inputbox "Username" "User will be created and the password must be set at the end of the installation" "${config[USERNAME]}" 3>&1 1>&2 2>&3)
 }
-
 
 ask_timezone() {
     local timezones
@@ -315,11 +283,9 @@ ask_timezone() {
     dialog_wrapper TIMEZONE $(radiolist "Timezone" "Select the local timezone" "${timezones[@]}" 3>&1 1>&2 2>&3)
 }
 
-
 ask_additional_packages() {
     dialog_wrapper ADDITIONAL_PACKAGES "$(inputbox "Additional packages" "Install additional packages" "${config[ADDITIONAL_PACKAGES]}" 3>&1 1>&2 2>&3)"
 }
-
 
 ask_confirm() {
     local config_list
@@ -327,24 +293,22 @@ ask_confirm() {
     local config_check_return_code=$?
     whiptail --yesno "All parameters must be set\n\n$config_list" $DIALOG_SIZE --title "Confirm" --defaultno --yes-button "Start installation" --no-button $BACK_BUTTON_TEXT
     wizard_step_exit_code=$?
-    if (( $wizard_step_exit_code == 0 && $config_check_return_code == $INVALID_CONFIG_RETURN_CODE)); then
+    if (($wizard_step_exit_code == 0 && $config_check_return_code == $INVALID_CONFIG_RETURN_CODE)); then
         ask_confirm
     fi
 }
 
-
 do_transition() {
     ${states[$current_state]}
-    if (( $wizard_step_exit_code == 0 )); then
+    if (($wizard_step_exit_code == 0)); then
         ((current_state++))
-    elif (( $wizard_step_exit_code == 1 )); then
+    elif (($wizard_step_exit_code == 1)); then
         ((current_state--))
     else
         exit
     fi
     do_transition
 }
-
 
 run() {
     local -A states
@@ -363,6 +327,5 @@ run() {
 
     do_transition
 }
-
 
 run
