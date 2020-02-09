@@ -95,12 +95,6 @@ mount_partitions() {
     mount "$efi_part" /mnt/boot
 }
 
-unmount_partitions() {
-    print_h0 "Unmount partitions"
-    umount "$efi_part"
-    umount "$root_part"
-}
-
 create_swap() {
     print_h0 "Create swap partition"
     mkswap "$swap_part"
@@ -186,13 +180,24 @@ EOF
 create_user() {
     print_h0 "Create user: ${config[USERNAME]}"
     arch-chroot /mnt useradd -m -G wheel "${config[USERNAME]}"
-    print_h1 "Please enter password"
+}
+
+set_user_password() {
+    print_h0 "Please enter password for ${config[USERNAME]}"
     arch-chroot /mnt passwd "${config[USERNAME]}"
 }
 
-lock_root_login() {
-    print_h0 "Lock root login"
+finalize_installation() {
+    print_h0 "Finalize installation"
+
+    print_h1 "Lock root login"
     arch-chroot /mnt passwd -l root
+
+    print_h1 "Unmount partitions"
+    umount "$efi_part"
+    umount "$root_part"
+
+    print_h0 "Installation finished"
 }
 
 install_arch() {
@@ -216,10 +221,9 @@ install_arch() {
     generate_sudoers_file
     install_bootloader
     create_user
+    set_user_password
 
-    lock_root_login
-    unmount_partitions
-    print_h0 "Installation finished"
+    finalize_installation
 }
 
 ################################
