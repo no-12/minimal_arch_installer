@@ -260,8 +260,8 @@ dialog_wrapper() {
     fi
 }
 
-init_message() {
-    whiptail --msgbox "Bash script to install Arch" "${DIALOG_SIZE[@]}" --title "Minimal Arch Installer"
+welcome() {
+    whiptail --yesno "Bash script to install Arch" "${DIALOG_SIZE[@]}" --title "Minimal Arch Installer" --yes-button "Ok" --no-button "Cancel"
     wizard_step_exit_code=$?
 }
 
@@ -322,17 +322,18 @@ do_transition() {
 
 run() {
     local -A states
-    states[0]=init_message
-    states[1]=ask_disk
-    states[2]=ask_hostname
-    states[3]=ask_username
-    states[4]=ask_timezone
-    states[5]=ask_additional_packages
-    states[6]=ask_confirm
-    states[7]=install_arch
-    states[8]="exit"
+    states[0]="exit 1"
+    states[1]=welcome
+    states[2]=ask_disk
+    states[3]=ask_hostname
+    states[4]=ask_username
+    states[5]=ask_timezone
+    states[6]=ask_additional_packages
+    states[7]=ask_confirm
+    states[8]=install_arch
+    states[9]="exit"
 
-    local -i current_state=0
+    local -i current_state=1
     local -i wizard_step_exit_code=0
 
     do_transition
