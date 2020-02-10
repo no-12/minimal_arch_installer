@@ -202,8 +202,7 @@ finalize_installation() {
     arch-chroot /mnt passwd -l root
 
     print_h1 "Unmount partitions"
-    umount "$efi_part"
-    umount "$root_part"
+    umount -R /mnt
 
     print_h0 "Installation finished"
 }
@@ -319,29 +318,30 @@ do_transition() {
     else
         exit
     fi
-    do_transition
 }
 
 run() {
     local -A states
-    states[0]="exit 1"
-    states[1]=welcome
-    states[2]=ask_disk
-    states[3]=ask_hostname
-    states[4]=ask_username
-    states[5]=ask_timezone
-    states[6]=ask_additional_packages
-    states[7]=ask_confirm
-    states[8]="install_arch && exit"
+    states[1]="exit 1"
+    states[2]=welcome
+    states[3]=ask_disk
+    states[4]=ask_hostname
+    states[5]=ask_username
+    states[6]=ask_timezone
+    states[7]=ask_additional_packages
+    states[8]=ask_confirm
+    states[9]="install_arch && wizard_step_exit_code=0"
 
     local -i wizard_step_exit_code=0
-    local -i current_state=1
+    local -i current_state=2
 
     if [[ $SKIP_WIZARD == true ]]; then
-        current_state=8
+        current_state="${#states[@]}"
     fi
 
-    do_transition
+    until [ "$current_state" -gt "${#states[@]}" ]; do
+        do_transition
+    done
 }
 
 run
