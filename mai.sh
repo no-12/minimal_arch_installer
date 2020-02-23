@@ -50,9 +50,15 @@ check_and_init() {
     print_h0 "Check Config"
     check_config
 
-    efi_part=/dev/${config[DISK]}1
-    swap_part=/dev/${config[DISK]}2
-    root_part=/dev/${config[DISK]}3
+    if [[ "${config[DISK]}" == nvm* ]]; then
+        efi_part=/dev/${config[DISK]}p1
+        swap_part=/dev/${config[DISK]}p2
+        root_part=/dev/${config[DISK]}p3
+    else
+        efi_part=/dev/${config[DISK]}1
+        swap_part=/dev/${config[DISK]}2
+        root_part=/dev/${config[DISK]}3
+    fi
 }
 
 update_systemclock() {
