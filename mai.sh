@@ -150,6 +150,8 @@ set_locale() {
 generate_sudoers_file() {
     print_h0 "Generate /etc/sudoers"
     tee /mnt/etc/sudoers <<EOF
+#includedir /etc/sudoers.d
+
 Defaults    env_reset
 Defaults    secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
