@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 
+set -eu -o pipefail
+
 declare -r INVALID_CONFIG_RETURN_CODE=64
 declare -ar DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
 
-declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:=false}
+declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
 
 declare -A config
-config[DISK]=${MAI_DISK}
-config[HOSTNAME]=${MAI_HOSTNAME}
-config[USERNAME]=${MAI_USERNAME}
-config[TIMEZONE]=${MAI_TIMEZONE:="Europe/Berlin"}
-config[ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:="git ansible"}
+config[DISK]=${MAI_DISK:-}
+config[HOSTNAME]=${MAI_HOSTNAME:-}
+config[USERNAME]=${MAI_USERNAME:-}
+config[TIMEZONE]=${MAI_TIMEZONE:-"Europe/Berlin"}
+config[ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:-"git ansible"}
 
 declare efi_part
 declare swap_part
@@ -264,7 +266,7 @@ dialog_wrapper() {
     wizard_step_exit_code=$?
     local parameter=$1
     local dialog_return_value="$2"
-    if [[ ! -z $dialog_return_value ]]; then
+    if [[ -n $dialog_return_value ]]; then
         config[$parameter]="$dialog_return_value"
     fi
 }
