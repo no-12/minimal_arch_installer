@@ -20,11 +20,11 @@ declare swap_part
 declare root_part
 
 print_h0() {
-    echo -e "\\e[42m==> $1\\e[0m"
+    echo -e "\\e[42m==> $1\\e[0m" 1>&2
 }
 
 print_h1() {
-    echo -e "\\e[44m===> $1\\e[0m"
+    echo -e "\\e[44m===> $1\\e[0m" 1>&2
 }
 
 generate_file() {
@@ -218,8 +218,6 @@ finalize_installation() {
 }
 
 install_arch() {
-    set -e
-
     check_and_init
 
     update_systemclock
@@ -252,28 +250,20 @@ radiolist() {
     local text=$2
     local -a entries
     IFS=';' read -r -a entries <<<"$3"
-    whiptail --radiolist "${text}" "${DIALOG_SIZE[@]}" 20 --title "${title}" --cancel-button $BACK_BUTTON_TEXT "${entries[@]}"
+    whiptail --radiolist "${text}" "${DIALOG_SIZE[@]}" 20 --title "${title}" --cancel-button $BACK_BUTTON_TEXT "${entries[@]}" 3>&1 1>&2 2>&3
 }
 
 inputbox() {
     local title=$1
     local text=$2
     local default_value=$3
-    whiptail --inputbox "${text}" "${DIALOG_SIZE[@]}" "${default_value}" --title "${title}" --cancel-button $BACK_BUTTON_TEXT
+    whiptail --inputbox "${text}" "${DIALOG_SIZE[@]}" "${default_value}" --title "${title}" --cancel-button $BACK_BUTTON_TEXT 3>&1 1>&2 2>&3
 }
 
-dialog_wrapper() {
-    wizard_step_exit_code=$?
-    local parameter=$1
-    local dialog_return_value="$2"
-    if [[ -n $dialog_return_value ]]; then
-        config[$parameter]="$dialog_return_value"
-    fi
-}
-
-welcome() {
-    whiptail --yesno "Bash script to install Arch" "${DIALOG_SIZE[@]}" --title "Minimal Arch Installer" --yes-button "Ok" --no-button "Cancel"
-    wizard_step_exit_code=$?
+start_wizard() {
+    local text="Bash script to install Arch"
+    whiptail --yesno "$text" "${DIALOG_SIZE[@]}" --title "Minimal Arch Installer" --yes-button "Ok" --no-button "Cancel" || exit 1
+    ask_disk
 }
 
 ask_disk() {
@@ -283,15 +273,20 @@ ask_disk() {
         if ( $1 == current ) state="on";
         print $1,$4,state;
     }')
-    dialog_wrapper DISK "$(radiolist "Disk" "The install script will create 3 partitions (efi, root and swap) on the seleceted disk. The swap partition will be the same size as RAM.\\n\\nAll data on the disk will be lost forever." "$disks" 3>&1 1>&2 2>&3)"
+    local text="The install script will create 3 partitions (efi, root and swap) on the seleceted disk. The swap partition will be the same size as RAM.\\n\\nAll data on the disk will be lost forever."
+    config[DISK]="$(radiolist "Disk" "$text" "$disks")" || start_wizard
+    ask_hostname
 }
 
 ask_hostname() {
-    dialog_wrapper HOSTNAME "$(inputbox "Hostname" "" "${config[HOSTNAME]}" 3>&1 1>&2 2>&3)"
+    config[HOSTNAME]="$(inputbox "Hostname" "" "${config[HOSTNAME]}")" || ask_disk
+    ask_username
 }
 
 ask_username() {
-    dialog_wrapper USERNAME "$(inputbox "Username" "User will be created and the password must be set at the end of the installation" "${config[USERNAME]}" 3>&1 1>&2 2>&3)"
+    local text="User will be created and the password must be set at the end of the installation"
+    config[USERNAME]="$(inputbox "Username" "$text" "${config[USERNAME]}")" || ask_hostname
+    ask_timezone
 }
 
 ask_timezone() {
@@ -301,57 +296,34 @@ ask_timezone() {
         if ( $1 == current ) state="on";
         print $1,"|",state;
     }')
-    dialog_wrapper TIMEZONE "$(radiolist "Timezone" "Select the local timezone" "$timezones" 3>&1 1>&2 2>&3)"
+    local text="Select the local timezone"
+    config[TIMEZONE]="$(radiolist "Timezone" "$text" "$timezones")" || ask_username
+    ask_additional_packages
 }
 
 ask_additional_packages() {
-    dialog_wrapper ADDITIONAL_PACKAGES "$(inputbox "Additional packages" "Install additional packages" "${config[ADDITIONAL_PACKAGES]}" 3>&1 1>&2 2>&3)"
+    local text="Install additional packages"
+    config[ADDITIONAL_PACKAGES]="$(inputbox "Additional packages" "$text" "${config[ADDITIONAL_PACKAGES]}")" || ask_timezone
+    ask_confirm
 }
 
 ask_confirm() {
     local config_list
     config_list=$(check_config)
     local config_check_return_code=$?
-    whiptail --yesno "All parameters must be set\\n\\n$config_list" "${DIALOG_SIZE[@]}" --title "Confirm" --defaultno --yes-button "Start installation" --no-button $BACK_BUTTON_TEXT
-    wizard_step_exit_code=$?
-    if ((wizard_step_exit_code == 0 && config_check_return_code == INVALID_CONFIG_RETURN_CODE)); then
+
+    local text="All parameters must be set\\n\\n$config_list"
+    whiptail --yesno "$text" "${DIALOG_SIZE[@]}" --title "Confirm" --defaultno --yes-button "Start installation" --no-button $BACK_BUTTON_TEXT || exit 1
+
+    if ((config_check_return_code == INVALID_CONFIG_RETURN_CODE)); then
         ask_confirm
     fi
+
+    install_arch
 }
 
-do_transition() {
-    ${states[$current_state]}
-    if ((wizard_step_exit_code == 0)); then
-        ((current_state++))
-    elif ((wizard_step_exit_code == 1)); then
-        ((current_state--))
-    else
-        exit
-    fi
-}
-
-run() {
-    local -A states
-    states[1]="exit 1"
-    states[2]=welcome
-    states[3]=ask_disk
-    states[4]=ask_hostname
-    states[5]=ask_username
-    states[6]=ask_timezone
-    states[7]=ask_additional_packages
-    states[8]=ask_confirm
-    states[9]="install_arch && wizard_step_exit_code=0"
-
-    local -i wizard_step_exit_code=0
-    local -i current_state=2
-
-    if [[ $SKIP_WIZARD == true ]]; then
-        current_state="${#states[@]}"
-    fi
-
-    until [ "$current_state" -gt "${#states[@]}" ]; do
-        do_transition
-    done
-}
-
-run
+if [[ $SKIP_WIZARD == true ]]; then
+    install_arch
+else
+    start_wizard
+fi
