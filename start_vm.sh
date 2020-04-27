@@ -21,9 +21,11 @@ vbox_disk_image_file="${vbox_settings_file/vbox/vdi}"
 log "Creat new disk: $vbox_disk_image_file"
 VBoxManage createmedium disk --filename "$vbox_disk_image_file" --size 20000
 
+log "Configure vm"
 VBoxManage modifyvm "$vm_name" --memory 1024 --vram 128
 VBoxManage storagectl "$vm_name" --name "SATA" --add sata --controller IntelAhci
 VBoxManage storageattach "$vm_name" --storagectl "SATA" --port 0 --device 0 --type hdd --medium "$vbox_disk_image_file"
 VBoxManage storageattach "$vm_name" --storagectl "SATA" --port 1 --device 0 --type dvddrive --medium "$archlinux_iso"
 
+log "Start vm"
 VBoxManage startvm "$vm_name" --type gui
