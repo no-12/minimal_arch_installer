@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
-declare -r vm_name=arch_mai_test2
+declare -r vm_name=arch_mai_test
 declare archlinux_iso="$1"
 
 log() {
@@ -14,7 +14,7 @@ if VBoxManage showvminfo "$vm_name"; then
 fi
 
 log "Create new vm: $vm_name"
-vbox_settings_file=$(VBoxManage createvm --name "$vm_name" --ostype "ArchLinux_64" --register | grep "Settings file:" | sed "s/^.*:\s*//" | sed "s/'//g")
+vbox_settings_file=$(VBoxManage createvm --name "$vm_name" --ostype "ArchLinux_64" --register | grep "Settings file:" | sed "s/^.*:\s*// ; s/'//g")
 log "vbox_settings_file: $vbox_settings_file"
 
 vbox_disk_image_file="${vbox_settings_file/vbox/vdi}"
