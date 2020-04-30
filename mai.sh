@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-
 set -eu -o pipefail
 
 declare -r INVALID_CONFIG_RETURN_CODE=64
-declare -ar DIALOG_SIZE=(30 78)
+declare -ra DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
 
 declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
 
-declare -A config
-config[DISK]=${MAI_DISK:-}
-config[HOSTNAME]=${MAI_HOSTNAME:-}
-config[USERNAME]=${MAI_USERNAME:-}
-config[TIMEZONE]=${MAI_TIMEZONE:-"Europe/Berlin"}
-config[ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:-"git ansible"}
+declare -A "CONFIG=(
+    [DISK]=${MAI_DISK:-}
+    [HOSTNAME]=${MAI_HOSTNAME:-}
+    [USERNAME]=${MAI_USERNAME:-}
+    [TIMEZONE]=${MAI_TIMEZONE:-'Europe/Berlin'}
+    [ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:-'git ansible'}
+)"
 
-declare efi_part
-declare swap_part
-declare root_part
+declare -a PARTITION_STRINGS
 
 print_h0() {
     echo -e "\\e[42m==> $1\\e[0m" 1>&2
@@ -34,10 +32,11 @@ generate_file() {
     echo -e "$content" | tee /mnt"$path"
 }
 
-check_config() {
+validate_config() {
+    print_h0 "Validate Config"
     local return_code=0
-    for key in "${!config[@]}"; do
-        local value="${config[$key]}"
+    for key in "${!CONFIG[@]}"; do
+        local value="${CONFIG[$key]}"
         if [[ -z $value ]]; then
             return_code=$INVALID_CONFIG_RETURN_CODE
             printf "%-20s --> *****NOT SET*****\\n" "$key"
@@ -48,86 +47,152 @@ check_config() {
     return $return_code
 }
 
-check_and_init() {
-    print_h0 "Check Config"
-    check_config
-
-    if [[ "${config[DISK]}" == nvm* ]]; then
-        efi_part=/dev/${config[DISK]}p1
-        swap_part=/dev/${config[DISK]}p2
-        root_part=/dev/${config[DISK]}p3
-    else
-        efi_part=/dev/${config[DISK]}1
-        swap_part=/dev/${config[DISK]}2
-        root_part=/dev/${config[DISK]}3
-    fi
-}
-
 update_systemclock() {
     print_h0 "Update system clock"
     timedatectl set-ntp true
 }
 
+get_first_free_disk_sector() {
+    sgdisk -F "${CONFIG[DISK]}"
+}
+
+create_partition() {
+    local partition_string="$1"
+    local -A partition
+    convert_string_to_map "$partition_string" partition
+
+    if ((partition[size] > 0)); then
+        print_h1 "Create partition #${partition[number]} with ${partition[size]} sectors"
+        local first_free_disk_sector
+        first_free_disk_sector="$(get_first_free_disk_sector)"
+        local last_sector=$((first_free_disk_sector + "${partition[size]}" - 1))
+        sgdisk --new="${partition[number]}:${first_free_disk_sector}:${last_sector}" "${CONFIG[DISK]}"
+    else
+        print_h1 "Create partition #${partition[number]} with largest available size"
+        sgdisk --largest-new="${partition[number]}" "${CONFIG[DISK]}"
+    fi
+
+    print_h1 "Set partition #${partition[number]} guid to ${partition[guid]}"
+    sgdisk --typecode="${partition[number]}:${partition[guid]}" "${CONFIG[DISK]}"
+}
+
 partition_disk() {
-    print_h0 "Partition disk ${config[DISK]}"
-    local efi_size=550
-    local efi_end
-    efi_end=$((efi_size + 1))
+    print_h0 "Partition disk ${CONFIG[DISK]}"
 
-    local swap_size
-    swap_size=$(awk '/^MemTotal:/ { print rshift($2, 10); } ' /proc/meminfo)
-    local swap_end
-    swap_end=$((efi_end + swap_size + 1))
+    print_h1 "Create new GPT for ${CONFIG[DISK]}"
+    sgdisk -o "${CONFIG[DISK]}"
+    partprobe
 
-    print_h1 "EFI size: $efi_size MiB"
-    print_h1 "Swap size: $swap_size MiB"
+    for partition_string in "${PARTITION_STRINGS[@]}"; do
+        create_partition "$partition_string"
+    done
+}
 
-    parted --script /dev/"${config[DISK]}" \
-        mklabel gpt \
-        mkpart primary fat32 1MiB ${efi_end}MiB \
-        set 1 esp on \
-        mkpart primary linux-swap ${efi_end}MiB ${swap_end}MiB \
-        mkpart primary ext4 ${swap_end}MiB 100%
+format_partition() {
+    local partition_string="$1"
+    local -A partition
+    convert_string_to_map "$partition_string" partition
+
+    if [[ "${partition[format]}" == false ]]; then
+        print_h1 "Skip format ${partition[device]}"
+        return
+    fi
+
+    if [[ "${partition[filesystem]}" = "swap" ]]; then
+        print_h1 "Set up a Linux swap area on device ${partition[device]}"
+        mkswap "${partition[device]}"
+        return
+    fi
+
+    local mkfs_parameter="-F"
+    if [[ "${partition[filesystem]}" == *"fat"* ]]; then
+        mkfs_parameter="-F32"
+    fi
+    print_h1 "Create filesystem ${partition[filesystem]} ${mkfs_parameter} on device ${partition[device]}"
+    eval "mkfs.${partition[filesystem]} ${mkfs_parameter} ${partition[device]}"
 }
 
 format_partitions() {
-    print_h0 "Format partitions"
-    mkfs.fat -F32 "$efi_part"
-    mkfs.ext4 -F "$root_part"
+    print_h0 "Format partitions ${CONFIG[DISK]}"
+    for partition_string in "${PARTITION_STRINGS[@]}"; do
+        format_partition "$partition_string"
+    done
+}
+
+get_root_partition_device() {
+    local -a partition_strings=("$@")
+    local root_partition_string
+    root_partition_string=$(printf -- '%s\n' "${partition_strings[@]}" | grep 'mountpoint=/;')
+    [ -z "$root_partition_string" ] && return 1
+    local -A root_partition
+    convert_string_to_map "$root_partition_string" root_partition
+    echo "${root_partition[device]}"
+}
+
+get_swap_partition_device() {
+    local -a partition_strings=("$@")
+    local root_partition_string
+    root_partition_string=$(printf -- '%s\n' "${partition_strings[@]}" | grep 'filesystem=swap;')
+    [ -z "$root_partition_string" ] && return 1
+    local -A root_partition
+    convert_string_to_map "$root_partition_string" root_partition
+    echo "${root_partition[device]}"
+}
+
+mount_additional_partition() {
+    local partition_string="$1"
+    local -A partition
+    convert_string_to_map "$partition_string" partition
+
+    if [[ "${partition[mountpoint]}" = / ]]; then
+        echo "Skipping root partition" 1>&2
+        return 0
+    fi
+
+    if [[ "${partition[mountpoint]}" != "/"* ]]; then
+        echo "Skipping ${partition[mountpoint]} no valid mountpoint" 1>&2
+        return 0
+    fi
+
+    if [[ ! -d "/mnt${partition[mountpoint]}" ]]; then
+        mkdir "/mnt${partition[mountpoint]}"
+    fi
+    mount "${partition[device]}" "/mnt${partition[mountpoint]}"
 }
 
 mount_partitions() {
     print_h0 "Mount partitions"
-    mount "$root_part" /mnt
-    if [[ ! -d /mnt/boot ]]; then
-        mkdir /mnt/boot
-    fi
-    mount "$efi_part" /mnt/boot
-}
 
-create_swap() {
-    print_h0 "Create swap partition"
-    mkswap "$swap_part"
+    local root_partition_device
+    root_partition_device="$(get_root_partition_device "${PARTITION_STRINGS[@]}")"
+    print_h1 "Mount $root_partition_device as root partition"
+    mount "$root_partition_device" /mnt
+
+    for partition_string in "${PARTITION_STRINGS[@]}"; do
+        mount_additional_partition "$partition_string"
+    done
 }
 
 install_base_packages() {
     print_h0 "Install base packages"
     pacman -Sy --noconfirm reflector
     reflector --age 12 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
-    eval "pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager ${config[ADDITIONAL_PACKAGES]}"
+    eval "pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager ${CONFIG[ADDITIONAL_PACKAGES]}"
 }
 
 generate_fstab() {
     print_h0 "Generate fstab file"
-    swapon "$swap_part"
+    local swap_partition_device
+    swap_partition_device=$(get_swap_partition_device "${PARTITION_STRINGS[@]}")
+    swapon "$swap_partition_device"
     genfstab -U /mnt >/mnt/etc/fstab
     cat /mnt/etc/fstab
-    swapoff "$swap_part"
+    swapoff "$swap_partition_device"
 }
 
 generate_host_files() {
     print_h0 "Generate host files"
-    generate_file /etc/hostname "${config[HOSTNAME]}\\n"
+    generate_file /etc/hostname "${CONFIG[HOSTNAME]}\\n"
     generate_file /etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
 }
 
@@ -137,8 +202,8 @@ enable_networkmanager_service() {
 }
 
 set_timezone() {
-    print_h0 "Set timezone to ${config[TIMEZONE]}"
-    arch-chroot /mnt ln -sf "/usr/share/zoneinfo/${config[TIMEZONE]}" /etc/localtime
+    print_h0 "Set timezone to ${CONFIG[TIMEZONE]}"
+    arch-chroot /mnt ln -sf "/usr/share/zoneinfo/${CONFIG[TIMEZONE]}" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 }
 
@@ -167,15 +232,17 @@ install_bootloader() {
     print_h0 "Install bootloader"
     arch-chroot /mnt bootctl --path=/boot install
 
-    local root_partuuid
-    root_partuuid=$(blkid -s PARTUUID -o value "$root_part")
+    local root_partition_device
+    root_partition_device=$(get_root_partition_device "${PARTITION_STRINGS[@]}")
+    local root_partition_uuid
+    root_partition_uuid=$(blkid -s PARTUUID -o value "$root_partition_device")
 
     print_h1 "Generate /boot/loader/entries/arch.conf"
     tee /mnt/boot/loader/entries/arch.conf <<EOF
 title   Arch Linux
 linux   /vmlinuz-linux
 initrd  /initramfs-linux.img
-options root=PARTUUID=${root_partuuid} rw
+options root=PARTUUID=${root_partition_uuid} rw
 
 EOF
 
@@ -190,16 +257,16 @@ EOF
 }
 
 create_user() {
-    print_h0 "Create user: ${config[USERNAME]}"
-    arch-chroot /mnt useradd -m -G wheel "${config[USERNAME]}"
+    print_h0 "Create user: ${CONFIG[USERNAME]}"
+    arch-chroot /mnt useradd -m -G wheel "${CONFIG[USERNAME]}"
 }
 
 set_user_password() {
-    print_h0 "Please enter password for ${config[USERNAME]}"
+    print_h0 "Please enter password for ${CONFIG[USERNAME]}"
     set +e
     local -i password_is_set=1
     until [ $password_is_set -eq 0 ]; do
-        arch-chroot /mnt passwd "${config[USERNAME]}"
+        arch-chroot /mnt passwd "${CONFIG[USERNAME]}"
         password_is_set=$?
     done
     set -e
@@ -218,13 +285,14 @@ finalize_installation() {
 }
 
 install_arch() {
-    check_and_init
+    validate_config
 
     update_systemclock
+
+    mapfile -t PARTITION_STRINGS < <(create_default_partition_strings "${CONFIG[DISK]}" /proc/meminfo)
     partition_disk
     format_partitions
     mount_partitions
-    create_swap
 
     install_base_packages
 
@@ -240,6 +308,88 @@ install_arch() {
 
     finalize_installation
 }
+
+################################
+# disk partitioning
+################################
+
+get_physical_sector_size_in_KiB() {
+    local disk="$1"
+    lsblk -dno LOG-SeC "$disk" | awk '{$1=$1;print}'
+}
+
+get_ram_size_in_KiB() {
+    local meminfo_file="$1"
+    awk '/^MemTotal:/ { print $2; }' "$meminfo_file"
+}
+
+get_partition_device_without_number() {
+    local disk="$1"
+    local number_prefix=""
+    if [[ "$disk" == *nvm* ]]; then
+        number_prefix="p"
+    fi
+    echo "${disk}${number_prefix}"
+}
+
+new_partition_string() {
+    local device_without_number="$1"
+    local number="$2"
+    local size="$3"
+    local filesystem="$4"
+    local format="$5"
+    local mountpoint="$6"
+    local guid="$7"
+    echo "number=${number};device=${device_without_number}${number};size=${size};filesystem=${filesystem};format=${format};mountpoint=${mountpoint};guid=${guid}"
+}
+
+convert_string_to_map() {
+    local string="$1"
+    local -n map_ref="$2"
+    while IFS="=" read -r key value; do
+        # shellcheck disable=SC2034
+        map_ref["$key"]="$value"
+    done < <(echo -e "${string//;/'\n'}")
+}
+
+create_default_partition_strings() {
+    local disk="$1"
+    local meminfo_file="$2"
+    local device_without_number
+    local sector_size_in_KiB
+    local ram_size_in_KiB
+    device_without_number=$(get_partition_device_without_number "$disk")
+    sector_size_in_KiB=$(get_physical_sector_size_in_KiB "$disk")
+    ram_size_in_KiB="$(get_ram_size_in_KiB "$meminfo_file")"
+
+    local boot_size=$((512 * 1024 ** 2 / sector_size_in_KiB))
+    local swap_size=$((ram_size_in_KiB * 1024 / sector_size_in_KiB))
+    local root_size=$((50 * 1024 ** 3 / sector_size_in_KiB))
+
+    new_partition_string "$device_without_number" 1 $boot_size vfat true /boot "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+    new_partition_string "$device_without_number" 2 $swap_size swap true [SWAP] "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+    new_partition_string "$device_without_number" 3 $root_size ext4 true / "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
+    new_partition_string "$device_without_number" 4 0 ext4 true /home "933ac7e1-2eb4-4f13-b844-0e14e2aef915"
+}
+
+# print_partition() {
+#     printf "%-16s %-8s %-8s %-12s %-37s\n" "$1" "$2" "$3" "$4" "$5"
+# }
+
+# print_partition_layout() {
+#     print_partition "Partition" "Size" "Type" "Mountpoint" "GUID"
+#     for ((i = 0; i < "${#partition_devices[@]}"; i++)); do
+#         print_partition "${partition_devices[i]}" "${partition_sizes[i]}" "${partition_types[i]}" "${partition_mountpoints[i]}" "${PARTITION_GUIDS[${partition_mountpoints[i]}]}"
+#     done
+# }
+
+# get_existing_partitions() {
+#     partitions=$(lsblk -flnp -o NAME,SIZE,FSTYPE,MOUNTPOINT,PARTTYPE "${CONFIG[DISK]}")
+#     mapfile -t partition_devices < <(echo "$partitions" | awk 'NR>1 { print $1 }')
+#     mapfile -t partition_sizes < <(echo "$partitions" | awk 'NR>1 { print $2 }')
+#     mapfile -t partition_types < <(echo "$partitions" | awk 'NR>1 { print $3 }')
+#     mapfile -t partition_mountpoints < <(echo "$partitions" | awk 'NR>1 { print $4 }')
+# }
 
 ################################
 # wizard stuff
@@ -268,48 +418,48 @@ start_wizard() {
 
 ask_disk() {
     local disks
-    disks=$(lsblk | awk -v current="${config[DISK]}" 'BEGIN{OFS=";";ORS=";";} /disk/ {
+    disks=$(lsblk -dno TYPE,PATH,SIZE | awk -v current="${CONFIG[DISK]}" 'BEGIN{OFS=";";ORS=";";} /disk/ {
         state="off";
         if ( $1 == current ) state="on";
-        print $1,$4,state;
+        print $2,$3,state;
     }')
     local text="The install script will create 3 partitions (efi, root and swap) on the seleceted disk. The swap partition will be the same size as RAM.\\n\\nAll data on the disk will be lost forever."
-    config[DISK]="$(radiolist "Disk" "$text" "$disks")" || start_wizard
+    CONFIG[DISK]="$(radiolist "Disk" "$text" "$disks")" || start_wizard
     ask_hostname
 }
 
 ask_hostname() {
-    config[HOSTNAME]="$(inputbox "Hostname" "" "${config[HOSTNAME]}")" || ask_disk
+    CONFIG[HOSTNAME]="$(inputbox "Hostname" "" "${CONFIG[HOSTNAME]}")" || ask_disk
     ask_username
 }
 
 ask_username() {
     local text="User will be created and the password must be set at the end of the installation"
-    config[USERNAME]="$(inputbox "Username" "$text" "${config[USERNAME]}")" || ask_hostname
+    CONFIG[USERNAME]="$(inputbox "Username" "$text" "${CONFIG[USERNAME]}")" || ask_hostname
     ask_timezone
 }
 
 ask_timezone() {
     local timezones
-    timezones=$(timedatectl list-timezones | awk -v current="${config[TIMEZONE]}" 'BEGIN{OFS=";";ORS=";";} {
+    timezones=$(timedatectl list-timezones | awk -v current="${CONFIG[TIMEZONE]}" 'BEGIN{OFS=";";ORS=";";} {
         state="off";
         if ( $1 == current ) state="on";
         print $1,"|",state;
     }')
     local text="Select the local timezone"
-    config[TIMEZONE]="$(radiolist "Timezone" "$text" "$timezones")" || ask_username
+    CONFIG[TIMEZONE]="$(radiolist "Timezone" "$text" "$timezones")" || ask_username
     ask_additional_packages
 }
 
 ask_additional_packages() {
     local text="Install additional packages"
-    config[ADDITIONAL_PACKAGES]="$(inputbox "Additional packages" "$text" "${config[ADDITIONAL_PACKAGES]}")" || ask_timezone
+    CONFIG[ADDITIONAL_PACKAGES]="$(inputbox "Additional packages" "$text" "${CONFIG[ADDITIONAL_PACKAGES]}")" || ask_timezone
     ask_confirm
 }
 
 ask_confirm() {
     local config_list
-    config_list=$(check_config)
+    config_list=$(validate_config)
     local config_check_return_code=$?
 
     local text="All parameters must be set\\n\\n$config_list"
@@ -322,8 +472,14 @@ ask_confirm() {
     install_arch
 }
 
-if [[ $SKIP_WIZARD == true ]]; then
-    install_arch
-else
-    start_wizard
+main() {
+    if [[ $SKIP_WIZARD == true ]]; then
+        install_arch
+    else
+        start_wizard
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
 fi

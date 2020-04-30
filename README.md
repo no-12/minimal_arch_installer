@@ -4,7 +4,7 @@ self contained installer written in bash
 
 boot the Arch Linux ISO and run the wizard with:
 ```bash
-curl -s https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh | bash -s
+wget https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh && bash mai.sh
 ```
 
 the wizard will ask for the following parameters:
@@ -19,7 +19,7 @@ ADDITIONAL_PACKAGES
 the paramaters can be set via environment variables prefixed with 'MAI_'. For example:
 ```bash
 MAI_DISK=/dev/sda
-curl -s https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh | bash -s
+wget https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh && bash mai.sh
 ```
 
 to skip the wizard set an environment variable MAI_SKIP_WIZARD=true
@@ -37,5 +37,5 @@ python -m http.server
 ```
 Run the following command on the vm
 ```bash
-curl -s 10.0.2.2:8000/mai.sh | bash -s
+wget 10.0.2.2:8000/mai.sh && bash mai.sh
 ```
