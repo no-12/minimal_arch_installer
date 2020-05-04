@@ -7,6 +7,13 @@ declare -r BACK_BUTTON_TEXT=Back
 
 declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
 
+declare -rA "GUID_MOINTPOINTS=(
+    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/boot
+    [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=SWAP
+    [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]=/
+    [933ac7e1-2eb4-4f13-b844-0e14e2aef915]=/home
+)"
+
 declare -A "CONFIG=(
     [DISK]=${MAI_DISK:-}
     [HOSTNAME]=${MAI_HOSTNAME:-}
@@ -25,6 +32,15 @@ print_h1() {
     echo -e "\\e[44m===> $1\\e[0m" 1>&2
 }
 
+convert_string_to_map() {
+    local string="$1"
+    local -n map_ref="$2"
+    while IFS="=" read -r key value; do
+        # shellcheck disable=SC2034
+        map_ref["$key"]="$value"
+    done < <(echo -e "${string//;/'\n'}")
+}
+
 generate_file() {
     local path=$1
     local content=$2
@@ -36,7 +52,7 @@ validate_config() {
     print_h0 "Validate Config"
     local return_code=0
     for key in "${!CONFIG[@]}"; do
-        local value="${CONFIG[$key]}"
+        local value="${CONFIG["$key"]}"
         if [[ -z $value ]]; then
             return_code=$INVALID_CONFIG_RETURN_CODE
             printf "%-20s --> *****NOT SET*****\\n" "$key"
@@ -52,125 +68,132 @@ update_systemclock() {
     timedatectl set-ntp true
 }
 
-get_first_free_disk_sector() {
-    sgdisk -F "${CONFIG[DISK]}"
-}
-
-create_partition() {
-    local partition_string="$1"
-    local -A partition
-    convert_string_to_map "$partition_string" partition
-
-    if ((partition[size] > 0)); then
-        print_h1 "Create partition #${partition[number]} with ${partition[size]} sectors"
-        local first_free_disk_sector
-        first_free_disk_sector="$(get_first_free_disk_sector)"
-        local last_sector=$((first_free_disk_sector + "${partition[size]}" - 1))
-        sgdisk --new="${partition[number]}:${first_free_disk_sector}:${last_sector}" "${CONFIG[DISK]}"
-    else
-        print_h1 "Create partition #${partition[number]} with largest available size"
-        sgdisk --largest-new="${partition[number]}" "${CONFIG[DISK]}"
-    fi
-
-    print_h1 "Set partition #${partition[number]} guid to ${partition[guid]}"
-    sgdisk --typecode="${partition[number]}:${partition[guid]}" "${CONFIG[DISK]}"
+get_ram_size_in_KiB() {
+    local meminfo_file="$1"
+    awk '/^MemTotal:/ { print $2"KiB"; }' "$meminfo_file"
 }
 
 partition_disk() {
     print_h0 "Partition disk ${CONFIG[DISK]}"
 
     print_h1 "Create new GPT for ${CONFIG[DISK]}"
-    sgdisk -o "${CONFIG[DISK]}"
-    partprobe
+    sgdisk -Z "${CONFIG[DISK]}"
 
-    for partition_string in "${PARTITION_STRINGS[@]}"; do
-        create_partition "$partition_string"
-    done
+    local efi_size="550MiB"
+    local swap_size
+    swap_size="$(get_ram_size_in_KiB /proc/meminfo)"
+    local root_size="50GiB"
+
+    print_h1 "Create $efi_size efi partition"
+    sgdisk --new=0:0:+${efi_size} --typecode=0:c12a7328-f81f-11d2-ba4b-00a0c93ec93b "${CONFIG[DISK]}"
+    print_h1 "Create $swap_size swap partition"
+    sgdisk --new=0:0:+"$swap_size" --typecode=0:0657fd6d-a4ab-43c4-84e5-0933c84b4f4f "${CONFIG[DISK]}"
+    print_h1 "Create $root_size root partition"
+    sgdisk --new=0:0:+"$root_size" --typecode=0:4f68bce3-e8cd-4db1-96e7-fbcaf984b709 "${CONFIG[DISK]}"
+    print_h1 "Create home partition"
+    sgdisk --new=0:0:0 --typecode=0:933ac7e1-2eb4-4f13-b844-0e14e2aef915 "${CONFIG[DISK]}"
+
+    # TODO mkfs
 }
 
-format_partition() {
-    local partition_string="$1"
-    local -A partition
-    convert_string_to_map "$partition_string" partition
+# format_partition() {
+#     local partition_string="$1"
+#     local -A partition
+#     convert_string_to_map "$partition_string" partition
 
-    if [[ "${partition[format]}" == false ]]; then
-        print_h1 "Skip format ${partition[device]}"
-        return
-    fi
+#     if [[ "${partition[format]}" == false ]]; then
+#         print_h1 "Skip format ${partition[device]}"
+#         return
+#     fi
 
-    if [[ "${partition[filesystem]}" = "swap" ]]; then
-        print_h1 "Set up a Linux swap area on device ${partition[device]}"
-        mkswap "${partition[device]}"
-        return
-    fi
+#     if [[ "${partition[filesystem]}" = "swap" ]]; then
+#         print_h1 "Set up a Linux swap area on device ${partition[device]}"
+#         mkswap "${partition[device]}"
+#         return
+#     fi
 
-    local mkfs_parameter="-F"
-    if [[ "${partition[filesystem]}" == *"fat"* ]]; then
-        mkfs_parameter="-F32"
-    fi
-    print_h1 "Create filesystem ${partition[filesystem]} ${mkfs_parameter} on device ${partition[device]}"
-    eval "mkfs.${partition[filesystem]} ${mkfs_parameter} ${partition[device]}"
-}
+#     local mkfs_parameter="-F"
+#     if [[ "${partition[filesystem]}" == *"fat"* ]]; then
+#         mkfs_parameter="-F32"
+#     fi
+#     print_h1 "Create filesystem ${partition[filesystem]} ${mkfs_parameter} on device ${partition[device]}"
+#     eval "mkfs.${partition[filesystem]} ${mkfs_parameter} ${partition[device]}"
+# }
 
 format_partitions() {
     print_h0 "Format partitions ${CONFIG[DISK]}"
-    for partition_string in "${PARTITION_STRINGS[@]}"; do
-        format_partition "$partition_string"
+
+    # TODO: rename to format_existing_partitions and run only if no default partition layout is created
+
+    # for partition_string in "${PARTITION_STRINGS[@]}"; do
+    #     format_partition "$partition_string"
+    # done
+}
+
+get_partition_guids() {
+    local disk="$1"
+    lsblk -lnpo TYPE,NAME,PARTTYPE "$disk" | awk '/part/ {print "device="$2";guid="$3;}'
+}
+
+map_mointpoint_to_device() {
+    local device_guid_string="$1"
+
+    local -A device_guid_map
+    convert_string_to_map "$device_guid_string" device_guid_map
+    local guid="${device_guid_map[guid]}"
+    for know_guid in "${!GUID_MOINTPOINTS[@]}"; do
+        if [[ "$know_guid" = "$guid" ]]; then
+            echo -n "${GUID_MOINTPOINTS["$guid"]}=${device_guid_map[device]};"
+            return
+        fi
     done
 }
 
-get_root_partition_device() {
-    local -a partition_strings=("$@")
-    local root_partition_string
-    root_partition_string=$(printf -- '%s\n' "${partition_strings[@]}" | grep 'mountpoint=/;')
-    [ -z "$root_partition_string" ] && return 1
-    local -A root_partition
-    convert_string_to_map "$root_partition_string" root_partition
-    echo "${root_partition[device]}"
+map_mointpoints_to_devices() {
+    local disk="$1"
+
+    local -a device_guid_strings
+    mapfile -t device_guid_strings < <(get_partition_guids "$disk")
+    for device_guid_string in "${device_guid_strings[@]}"; do
+        map_mointpoint_to_device "$device_guid_string"
+    done
+    echo
 }
 
-get_swap_partition_device() {
-    local -a partition_strings=("$@")
-    local root_partition_string
-    root_partition_string=$(printf -- '%s\n' "${partition_strings[@]}" | grep 'filesystem=swap;')
-    [ -z "$root_partition_string" ] && return 1
-    local -A root_partition
-    convert_string_to_map "$root_partition_string" root_partition
-    echo "${root_partition[device]}"
-}
+# mount_additional_partition() {
+#     local partition_string="$1"
+#     local -A partition
+#     convert_string_to_map "$partition_string" partition
 
-mount_additional_partition() {
-    local partition_string="$1"
-    local -A partition
-    convert_string_to_map "$partition_string" partition
+#     if [[ "${partition[mountpoint]}" = / ]]; then
+#         echo "Skipping root partition" 1>&2
+#         return 0
+#     fi
 
-    if [[ "${partition[mountpoint]}" = / ]]; then
-        echo "Skipping root partition" 1>&2
-        return 0
-    fi
+#     if [[ "${partition[mountpoint]}" != "/"* ]]; then
+#         echo "Skipping ${partition[mountpoint]} no valid mountpoint" 1>&2
+#         return 0
+#     fi
 
-    if [[ "${partition[mountpoint]}" != "/"* ]]; then
-        echo "Skipping ${partition[mountpoint]} no valid mountpoint" 1>&2
-        return 0
-    fi
-
-    if [[ ! -d "/mnt${partition[mountpoint]}" ]]; then
-        mkdir "/mnt${partition[mountpoint]}"
-    fi
-    mount "${partition[device]}" "/mnt${partition[mountpoint]}"
-}
+#     if [[ ! -d "/mnt${partition[mountpoint]}" ]]; then
+#         mkdir "/mnt${partition[mountpoint]}"
+#     fi
+#     mount "${partition[device]}" "/mnt${partition[mountpoint]}"
+# }
 
 mount_partitions() {
     print_h0 "Mount partitions"
 
-    local root_partition_device
-    root_partition_device="$(get_root_partition_device "${PARTITION_STRINGS[@]}")"
-    print_h1 "Mount $root_partition_device as root partition"
-    mount "$root_partition_device" /mnt
+    # TODO: use map_mointpoints_to_devices
 
-    for partition_string in "${PARTITION_STRINGS[@]}"; do
-        mount_additional_partition "$partition_string"
-    done
+    # local root_partition_device
+    # root_partition_device="$(get_root_partition_device "${PARTITION_STRINGS[@]}")"
+    # print_h1 "Mount $root_partition_device as root partition"
+    # mount "$root_partition_device" /mnt
+
+    # for partition_string in "${PARTITION_STRINGS[@]}"; do
+    #     mount_additional_partition "$partition_string"
+    # done
 }
 
 install_base_packages() {
@@ -291,6 +314,7 @@ install_arch() {
 
     mapfile -t PARTITION_STRINGS < <(create_default_partition_strings "${CONFIG[DISK]}" /proc/meminfo)
     partition_disk
+    # TODO: rename to format_existing_partitions and run only if no default partition layout is created
     format_partitions
     mount_partitions
 
@@ -308,88 +332,6 @@ install_arch() {
 
     finalize_installation
 }
-
-################################
-# disk partitioning
-################################
-
-get_physical_sector_size_in_KiB() {
-    local disk="$1"
-    lsblk -dno LOG-SeC "$disk" | awk '{$1=$1;print}'
-}
-
-get_ram_size_in_KiB() {
-    local meminfo_file="$1"
-    awk '/^MemTotal:/ { print $2; }' "$meminfo_file"
-}
-
-get_partition_device_without_number() {
-    local disk="$1"
-    local number_prefix=""
-    if [[ "$disk" == *nvm* ]]; then
-        number_prefix="p"
-    fi
-    echo "${disk}${number_prefix}"
-}
-
-new_partition_string() {
-    local device_without_number="$1"
-    local number="$2"
-    local size="$3"
-    local filesystem="$4"
-    local format="$5"
-    local mountpoint="$6"
-    local guid="$7"
-    echo "number=${number};device=${device_without_number}${number};size=${size};filesystem=${filesystem};format=${format};mountpoint=${mountpoint};guid=${guid}"
-}
-
-convert_string_to_map() {
-    local string="$1"
-    local -n map_ref="$2"
-    while IFS="=" read -r key value; do
-        # shellcheck disable=SC2034
-        map_ref["$key"]="$value"
-    done < <(echo -e "${string//;/'\n'}")
-}
-
-create_default_partition_strings() {
-    local disk="$1"
-    local meminfo_file="$2"
-    local device_without_number
-    local sector_size_in_KiB
-    local ram_size_in_KiB
-    device_without_number=$(get_partition_device_without_number "$disk")
-    sector_size_in_KiB=$(get_physical_sector_size_in_KiB "$disk")
-    ram_size_in_KiB="$(get_ram_size_in_KiB "$meminfo_file")"
-
-    local boot_size=$((512 * 1024 ** 2 / sector_size_in_KiB))
-    local swap_size=$((ram_size_in_KiB * 1024 / sector_size_in_KiB))
-    local root_size=$((50 * 1024 ** 3 / sector_size_in_KiB))
-
-    new_partition_string "$device_without_number" 1 $boot_size vfat true /boot "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
-    new_partition_string "$device_without_number" 2 $swap_size swap true [SWAP] "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
-    new_partition_string "$device_without_number" 3 $root_size ext4 true / "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
-    new_partition_string "$device_without_number" 4 0 ext4 true /home "933ac7e1-2eb4-4f13-b844-0e14e2aef915"
-}
-
-# print_partition() {
-#     printf "%-16s %-8s %-8s %-12s %-37s\n" "$1" "$2" "$3" "$4" "$5"
-# }
-
-# print_partition_layout() {
-#     print_partition "Partition" "Size" "Type" "Mountpoint" "GUID"
-#     for ((i = 0; i < "${#partition_devices[@]}"; i++)); do
-#         print_partition "${partition_devices[i]}" "${partition_sizes[i]}" "${partition_types[i]}" "${partition_mountpoints[i]}" "${PARTITION_GUIDS[${partition_mountpoints[i]}]}"
-#     done
-# }
-
-# get_existing_partitions() {
-#     partitions=$(lsblk -flnp -o NAME,SIZE,FSTYPE,MOUNTPOINT,PARTTYPE "${CONFIG[DISK]}")
-#     mapfile -t partition_devices < <(echo "$partitions" | awk 'NR>1 { print $1 }')
-#     mapfile -t partition_sizes < <(echo "$partitions" | awk 'NR>1 { print $2 }')
-#     mapfile -t partition_types < <(echo "$partitions" | awk 'NR>1 { print $3 }')
-#     mapfile -t partition_mountpoints < <(echo "$partitions" | awk 'NR>1 { print $4 }')
-# }
 
 ################################
 # wizard stuff
