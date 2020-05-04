@@ -25,6 +25,7 @@ log "Configure vm"
 VBoxManage modifyvm "$vm_name" --firmware efi
 VBoxManage modifyvm "$vm_name" --graphicscontroller vmsvga
 VBoxManage modifyvm "$vm_name" --memory 1024 --vram 128
+VBoxManage setextradata "$vm_name" VBoxInternal2/EfiGraphicsResolution 1440x900
 VBoxManage storagectl "$vm_name" --name "SATA" --add sata --controller IntelAhci
 VBoxManage storageattach "$vm_name" --storagectl "SATA" --port 0 --device 0 --type hdd --medium "$vbox_disk_image_file"
 VBoxManage storageattach "$vm_name" --storagectl "SATA" --port 1 --device 0 --type dvddrive --medium "$archlinux_iso"
