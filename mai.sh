@@ -98,17 +98,16 @@ partition_disk() {
 }
 
 get_device_guids() {
-    local disk="$1"
     # shellcheck disable=SC2034
-    local -n devices_guids_ref="$2"
-    eval "$(lsblk -lnpo TYPE,NAME,PARTTYPE "$disk" | awk '/part/ { printf "devices_guids_ref[%s]=%s\n", $2, $3 }')"
+    local -n devices_guids_ref="$1"
+    eval "$(lsblk -lnpo TYPE,NAME,PARTTYPE | awk '/part/ { printf "devices_guids_ref[%s]=%s\n", $2, $3 }')"
 }
 
 map_disk_guids_to_default_mkfscommands() {
-    print_h0 "Determine default mkfscommands ${CONFIG[DISK]}"
+    print_h0 "Determine default mkfscommands"
 
     local -A devices
-    get_device_guids "${CONFIG[DISK]}" devices
+    get_device_guids devices
 
     for device in "${!devices[@]}"; do
         local guid="${devices["$device"]}"
@@ -119,7 +118,7 @@ map_disk_guids_to_default_mkfscommands() {
 }
 
 format_partitions() {
-    print_h0 "Format partitions ${CONFIG[DISK]}"
+    print_h0 "Format partitions"
     for device in "${!MKFSCOMMANDS[@]}"; do
         print_h1 "Format device: ${MKFSCOMMANDS["$device"]} ${device}"
         eval "${MKFSCOMMANDS["$device"]} ${device}"
@@ -127,10 +126,10 @@ format_partitions() {
 }
 
 map_disk_guids_to_default_mointpoints() {
-    print_h0 "Determine default mountpoints ${CONFIG[DISK]}"
+    print_h0 "Determine default mountpoints"
 
     local -A devices
-    get_device_guids "${CONFIG[DISK]}" devices
+    get_device_guids devices
 
     for device in "${!devices[@]}"; do
         local guid="${devices["$device"]}"
