@@ -23,6 +23,7 @@ VBoxManage createmedium disk --filename "$vbox_disk_image_file" --size 120000
 
 log "Configure vm"
 VBoxManage modifyvm "$vm_name" --firmware efi
+VBoxManage modifyvm "$vm_name" --audio none
 VBoxManage modifyvm "$vm_name" --graphicscontroller vmsvga
 VBoxManage modifyvm "$vm_name" --memory 1024 --vram 128
 VBoxManage setextradata "$vm_name" VBoxInternal2/EfiGraphicsResolution 1440x900
