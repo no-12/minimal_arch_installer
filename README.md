@@ -7,23 +7,6 @@ boot the Arch Linux ISO and run the wizard with:
 wget https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh && bash mai.sh
 ```
 
-the wizard will ask for the following parameters:
-```bash
-DISK
-HOSTNAME
-USERNAME
-TIMEZONE
-ADDITIONAL_PACKAGES
-```
-
-the paramaters can be set via environment variables prefixed with 'MAI_'. For example:
-```bash
-MAI_DISK=/dev/sda
-wget https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh && bash mai.sh
-```
-
-to skip the wizard set an environment variable MAI_SKIP_WIZARD=true
-
 ## Test Minimal Arch Installer in VirtualBox
 ### Dependencies
 * Installed VirtualBox

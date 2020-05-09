@@ -18,14 +18,12 @@ declare -rA "GUID_MKFSCOMMANDS=(
     [933ac7e1-2eb4-4f13-b844-0e14e2aef915]='mkfs.ext4 -F'
 )"
 
-declare SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
-
 declare -A "CONFIG=(
-    [DISK]=${MAI_DISK:-}
-    [HOSTNAME]=${MAI_HOSTNAME:-}
-    [USERNAME]=${MAI_USERNAME:-}
-    [TIMEZONE]=${MAI_TIMEZONE:-'Europe/Berlin'}
-    [ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:-'git ansible'}
+    [DISK]=
+    [HOSTNAME]=
+    [USERNAME]=
+    [TIMEZONE]='Europe/Berlin'
+    [ADDITIONAL_PACKAGES]='git ansible'}
 )"
 declare -A MKFSCOMMANDS
 declare -A MOUNTPOINTS
@@ -410,14 +408,6 @@ ask_confirm() {
     install_arch
 }
 
-main() {
-    if [[ $SKIP_WIZARD == true ]]; then
-        install_arch
-    else
-        start_wizard
-    fi
-}
-
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main
+    start_wizard
 fi
