@@ -5,14 +5,20 @@ declare -r INVALID_CONFIG_RETURN_CODE=64
 declare -ra DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
 
-declare -r SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
-
 declare -rA "GUID_MOINTPOINTS=(
     [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/boot
     [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=SWAP
     [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]=/
     [933ac7e1-2eb4-4f13-b844-0e14e2aef915]=/home
 )"
+declare -rA "GUID_MKFSCOMMANDS=(
+    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]='mkfs.fat -F32'
+    [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]='mkswap'
+    [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]='mkfs.ext4 -F'
+    [933ac7e1-2eb4-4f13-b844-0e14e2aef915]='mkfs.ext4 -F'
+)"
+
+declare SKIP_WIZARD=${MAI_SKIP_WIZARD:-false}
 
 declare -A "CONFIG=(
     [DISK]=${MAI_DISK:-}
@@ -21,8 +27,8 @@ declare -A "CONFIG=(
     [TIMEZONE]=${MAI_TIMEZONE:-'Europe/Berlin'}
     [ADDITIONAL_PACKAGES]=${MAI_ADDITIONAL_PACKAGES:-'git ansible'}
 )"
-
-declare -a PARTITION_STRINGS
+declare -A MKFSCOMMANDS
+declare -A MOUNTPOINTS
 
 print_h0() {
     echo -e "\\e[42m==> $1\\e[0m" 1>&2
@@ -32,13 +38,8 @@ print_h1() {
     echo -e "\\e[44m===> $1\\e[0m" 1>&2
 }
 
-convert_string_to_map() {
-    local string="$1"
-    local -n map_ref="$2"
-    while IFS="=" read -r key value; do
-        # shellcheck disable=SC2034
-        map_ref["$key"]="$value"
-    done < <(echo -e "${string//;/'\n'}")
+log() {
+    echo -e "$1" 1>&2
 }
 
 generate_file() {
@@ -93,107 +94,95 @@ partition_disk() {
     print_h1 "Create home partition"
     sgdisk --new=0:0:0 --typecode=0:933ac7e1-2eb4-4f13-b844-0e14e2aef915 "${CONFIG[DISK]}"
 
-    # TODO mkfs
+    sleep 1
 }
 
-# format_partition() {
-#     local partition_string="$1"
-#     local -A partition
-#     convert_string_to_map "$partition_string" partition
+get_device_guids() {
+    local disk="$1"
+    # shellcheck disable=SC2034
+    local -n devices_guids_ref="$2"
+    eval "$(lsblk -lnpo TYPE,NAME,PARTTYPE "$disk" | awk '/part/ { printf "devices_guids_ref[%s]=%s\n", $2, $3 }')"
+}
 
-#     if [[ "${partition[format]}" == false ]]; then
-#         print_h1 "Skip format ${partition[device]}"
-#         return
-#     fi
+map_disk_guids_to_default_mkfscommands() {
+    print_h0 "Determine default mkfscommands ${CONFIG[DISK]}"
 
-#     if [[ "${partition[filesystem]}" = "swap" ]]; then
-#         print_h1 "Set up a Linux swap area on device ${partition[device]}"
-#         mkswap "${partition[device]}"
-#         return
-#     fi
+    local -A devices
+    get_device_guids "${CONFIG[DISK]}" devices
 
-#     local mkfs_parameter="-F"
-#     if [[ "${partition[filesystem]}" == *"fat"* ]]; then
-#         mkfs_parameter="-F32"
-#     fi
-#     print_h1 "Create filesystem ${partition[filesystem]} ${mkfs_parameter} on device ${partition[device]}"
-#     eval "mkfs.${partition[filesystem]} ${mkfs_parameter} ${partition[device]}"
-# }
+    for device in "${!devices[@]}"; do
+        local guid="${devices["$device"]}"
+        local mkfscommand="${GUID_MKFSCOMMANDS["$guid"]}"
+        log "device=${device}; guid=${guid}; mkfscommand=${mkfscommand}"
+        MKFSCOMMANDS["$device"]="$mkfscommand"
+    done
+}
 
 format_partitions() {
     print_h0 "Format partitions ${CONFIG[DISK]}"
-
-    # TODO: rename to format_existing_partitions and run only if no default partition layout is created
-
-    # for partition_string in "${PARTITION_STRINGS[@]}"; do
-    #     format_partition "$partition_string"
-    # done
+    for device in "${!MKFSCOMMANDS[@]}"; do
+        print_h1 "Format device: ${MKFSCOMMANDS["$device"]} ${device}"
+        eval "${MKFSCOMMANDS["$device"]} ${device}"
+    done
 }
 
-get_partition_guids() {
-    local disk="$1"
-    lsblk -lnpo TYPE,NAME,PARTTYPE "$disk" | awk '/part/ {print "device="$2";guid="$3;}'
+map_disk_guids_to_default_mointpoints() {
+    print_h0 "Determine default mountpoints ${CONFIG[DISK]}"
+
+    local -A devices
+    get_device_guids "${CONFIG[DISK]}" devices
+
+    for device in "${!devices[@]}"; do
+        local guid="${devices["$device"]}"
+        local mointpoint="${GUID_MOINTPOINTS["$guid"]}"
+        log "device=${device}; guid=${guid}; mointpoint=${mointpoint}"
+        MOUNTPOINTS["$device"]="$mointpoint"
+    done
 }
 
-map_mointpoint_to_device() {
-    local device_guid_string="$1"
+mount_additional_partition() {
+    local device="$1"
+    local mountpoint="$2"
 
-    local -A device_guid_map
-    convert_string_to_map "$device_guid_string" device_guid_map
-    local guid="${device_guid_map[guid]}"
-    for know_guid in "${!GUID_MOINTPOINTS[@]}"; do
-        if [[ "$know_guid" = "$guid" ]]; then
-            echo -n "${GUID_MOINTPOINTS["$guid"]}=${device_guid_map[device]};"
-            return
+    if [[ "${mountpoint}" = / ]]; then
+        log "Skipping root partition" 1>&2
+        return 0
+    fi
+
+    if [[ "${mountpoint}" != "/"* ]]; then
+        log "Skipping ${mountpoint} no valid mountpoint" 1>&2
+        return 0
+    fi
+
+    if [[ ! -d "/mnt${mountpoint}" ]]; then
+        mkdir "/mnt${mountpoint}"
+    fi
+    print_h1 "Mount ${device} as /mnt${mountpoint}"
+    mount "${device}" "/mnt${mountpoint}"
+}
+
+get_root_partition_device() {
+    for device in "${!MOUNTPOINTS[@]}"; do
+        local mountpoint="${MOUNTPOINTS["$device"]}"
+        if [[ "$mountpoint" = "/" ]]; then
+            echo "$device"
+            return 0
         fi
     done
+    return 1
 }
-
-map_mointpoints_to_devices() {
-    local disk="$1"
-
-    local -a device_guid_strings
-    mapfile -t device_guid_strings < <(get_partition_guids "$disk")
-    for device_guid_string in "${device_guid_strings[@]}"; do
-        map_mointpoint_to_device "$device_guid_string"
-    done
-    echo
-}
-
-# mount_additional_partition() {
-#     local partition_string="$1"
-#     local -A partition
-#     convert_string_to_map "$partition_string" partition
-
-#     if [[ "${partition[mountpoint]}" = / ]]; then
-#         echo "Skipping root partition" 1>&2
-#         return 0
-#     fi
-
-#     if [[ "${partition[mountpoint]}" != "/"* ]]; then
-#         echo "Skipping ${partition[mountpoint]} no valid mountpoint" 1>&2
-#         return 0
-#     fi
-
-#     if [[ ! -d "/mnt${partition[mountpoint]}" ]]; then
-#         mkdir "/mnt${partition[mountpoint]}"
-#     fi
-#     mount "${partition[device]}" "/mnt${partition[mountpoint]}"
-# }
 
 mount_partitions() {
     print_h0 "Mount partitions"
 
-    # TODO: use map_mointpoints_to_devices
+    local root_partition_device
+    root_partition_device=$(get_root_partition_device)
+    print_h1 "Mount $root_partition_device as root partition"
+    mount "$root_partition_device" /mnt
 
-    # local root_partition_device
-    # root_partition_device="$(get_root_partition_device "${PARTITION_STRINGS[@]}")"
-    # print_h1 "Mount $root_partition_device as root partition"
-    # mount "$root_partition_device" /mnt
-
-    # for partition_string in "${PARTITION_STRINGS[@]}"; do
-    #     mount_additional_partition "$partition_string"
-    # done
+    for device in "${!MOUNTPOINTS[@]}"; do
+        mount_additional_partition "$device" "${MOUNTPOINTS["$device"]}"
+    done
 }
 
 install_base_packages() {
@@ -203,14 +192,22 @@ install_base_packages() {
     eval "pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager ${CONFIG[ADDITIONAL_PACKAGES]}"
 }
 
+swapon_all_swap_partitions() {
+    for device in "${!MOUNTPOINTS[@]}"; do
+        local mountpoint="${MOUNTPOINTS["$device"]}"
+        if [[ "$mountpoint" = "SWAP" ]]; then
+            print_h1 "swapon ${device}"
+            swapon "$device"
+        fi
+    done
+}
+
 generate_fstab() {
     print_h0 "Generate fstab file"
-    local swap_partition_device
-    swap_partition_device=$(get_swap_partition_device "${PARTITION_STRINGS[@]}")
-    swapon "$swap_partition_device"
+    swapon_all_swap_partitions
     genfstab -U /mnt >/mnt/etc/fstab
     cat /mnt/etc/fstab
-    swapoff "$swap_partition_device"
+    swapoff -a
 }
 
 generate_host_files() {
@@ -256,7 +253,7 @@ install_bootloader() {
     arch-chroot /mnt bootctl --path=/boot install
 
     local root_partition_device
-    root_partition_device=$(get_root_partition_device "${PARTITION_STRINGS[@]}")
+    root_partition_device=$(get_root_partition_device)
     local root_partition_uuid
     root_partition_uuid=$(blkid -s PARTUUID -o value "$root_partition_device")
 
@@ -312,10 +309,10 @@ install_arch() {
 
     update_systemclock
 
-    mapfile -t PARTITION_STRINGS < <(create_default_partition_strings "${CONFIG[DISK]}" /proc/meminfo)
     partition_disk
-    # TODO: rename to format_existing_partitions and run only if no default partition layout is created
+    map_disk_guids_to_default_mkfscommands
     format_partitions
+    map_disk_guids_to_default_mointpoints
     mount_partitions
 
     install_base_packages
