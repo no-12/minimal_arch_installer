@@ -70,7 +70,7 @@ print_config() {
 
 is_config_valid() {
     for key in "${!CONFIG[@]}"; do
-        if [[ -z "${CONFIG["$key"]}" ]]; then
+        if [[ -z "${CONFIG["$key"]}" && "$key" != "ADDITIONAL_PACKAGES" ]]; then
             return 1
         fi
     done
