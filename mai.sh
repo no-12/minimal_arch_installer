@@ -332,9 +332,8 @@ menu() {
 radiolist() {
     local title=$1
     local text=$2
-    local -a entries
-    IFS=';' read -r -a entries <<<"$3"
-    whiptail --radiolist "$text" "${DIALOG_SIZE[@]}" 20 --title "$title" --cancel-button "$BACK_BUTTON_TEXT" "${entries[@]}" 3>&1 1>&2 2>&3
+    shift 2
+    whiptail --radiolist "$text" "${DIALOG_SIZE[@]}" 20 --title "$title" --cancel-button "$BACK_BUTTON_TEXT" "$@" 3>&1 1>&2 2>&3
 }
 
 inputbox() {
@@ -369,11 +368,11 @@ dialog_partition_disk_menu() {
 }
 
 dialog_select_disk() {
-    local disks
-    disks=$(lsblk -dno TYPE,PATH,SIZE | awk 'BEGIN{OFS=";";ORS=";";} /disk/ {print $2,$3,"off";}')
+    local -a disks
+    mapfile -t disks < <(lsblk -dno TYPE,PATH,SIZE | awk 'BEGIN{OFS="\n";} /disk/ {print $2,$3,"off";}')
     local disk
     NEXT_WIZARD_STEP=dialog_partition_disk_menu
-    if disk=$(radiolist "Create default partition layout" "Select a disk" "$disks"); then
+    if disk=$(radiolist "Create default partition layout" "Select a disk" "${disks[@]}"); then
         NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
         if [ -z "$disk" ]; then
             NEXT_WIZARD_STEP=dialog_select_disk
@@ -482,14 +481,14 @@ dialog_ask_username() {
 
 dialog_ask_timezone() {
     NEXT_WIZARD_STEP=dialog_ask_username
-    local timezones
-    timezones=$(timedatectl list-timezones | awk -v current="${CONFIG[TIMEZONE]}" 'BEGIN{OFS=";";ORS=";";} {
+    local -a timezones
+    mapfile -t timezones < <(timedatectl list-timezones | awk -v current="${CONFIG[TIMEZONE]}" 'BEGIN{OFS="\n";} {
         state="off";
         if ( $1 == current ) state="on";
         print $1,"|",state;
     }')
     local timezone
-    if timezone="$(radiolist "Timezone" "Select the local timezone" "$timezones")"; then
+    if timezone="$(radiolist "Timezone" "Select the local timezone" "${timezones[@]}")"; then
         CONFIG[TIMEZONE]="$timezone"
         NEXT_WIZARD_STEP=dialog_ask_additional_packages
     fi
