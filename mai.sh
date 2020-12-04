@@ -211,8 +211,6 @@ mount_partitions() {
 
 install_base_packages() {
     print_h0 "Install base packages"
-    pacman -Sy --noconfirm reflector
-    reflector --age 12 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
     eval "pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager ${CONFIG[ADDITIONAL_PACKAGES]}"
 }
 
