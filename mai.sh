@@ -3,18 +3,20 @@ set -eu -o pipefail
 
 declare -ra DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
+declare -r PROCEED_MENU_ENTRY="                            ===> Proceed ===>                            "
 declare -rA "GUID_MOINTPOINTS=(
     [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/boot
     [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=SWAP
     [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]=/
     [933ac7e1-2eb4-4f13-b844-0e14e2aef915]=/home
 )"
-declare -rA "GUID_MKFSCOMMANDS=(
-    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]='mkfs.fat -F32'
-    [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]='mkswap'
-    [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]='mkfs.ext4 -F'
-    [933ac7e1-2eb4-4f13-b844-0e14e2aef915]='mkfs.ext4 -F'
+declare -rA "MKFSCOMMANDS=(
+    [vfat]='mkfs.fat -F32'
+    [swap]='mkswap'
+    [ext4]='mkfs.ext4 -F'
 )"
+
+declare -A CURRENT_FILESYSTEMS
 
 declare -A "CONFIG=(
     [HOSTNAME]=
@@ -22,9 +24,9 @@ declare -A "CONFIG=(
     [TIMEZONE]='Europe/Berlin'
     [ADDITIONAL_PACKAGES]='git ansible'
 )"
-declare -A MKFSCOMMANDS
-declare -A MOUNTPOINTS
-declare NEXT_WIZARD_STEP=dialog_welcome
+declare -A CONFIG_FILESYSTEMS
+declare -A CONFIG_MOUNTPOINTS
+declare NEXT_WIZARD_STEP=dialog_partition_disk_menu
 
 print_h0() {
     echo -e "\\e[42m==> $1\\e[0m" 1>&2
@@ -93,39 +95,61 @@ get_device_guids() {
     eval "$(lsblk -lnpo TYPE,NAME,PARTTYPE | awk '/part/ { printf "devices_guids_ref[%s]=%s\n", $2, $3 }')"
 }
 
-map_disk_guids_to_default_mkfscommands() {
-    print_h0 "Determine default mkfscommands"
-
-    local -A devices
-    get_device_guids devices
-
-    for device in "${!devices[@]}"; do
-        local guid="${devices["$device"]}"
-        local mkfscommand="${GUID_MKFSCOMMANDS["$guid"]}"
-        log "device=${device}; guid=${guid}; mkfscommand=${mkfscommand}"
-        MKFSCOMMANDS["$device"]="$mkfscommand"
-    done
+get_partition_sizes() {
+    # shellcheck disable=SC2034
+    local -n partitions_sizes_ref="$1"
+    eval "$(lsblk -lnpo TYPE,NAME,SIZE | awk '/part/ { printf "partitions_sizes_ref[%s]=%s\n", $2, $3 }')"
 }
 
 format_partitions() {
     print_h0 "Format partitions"
-    for device in "${!MKFSCOMMANDS[@]}"; do
-        print_h1 "Format device: ${MKFSCOMMANDS["$device"]} ${device}"
-        eval "${MKFSCOMMANDS["$device"]} ${device}"
+    for device in "${!FILESYSTEMS[@]}"; do
+        local filesystem="${FILESYSTEMS["$device"]}"
+        print_h1 "Format device: ${MKFSCOMMANDS["$filesystem"]} $device"
+        eval "${MKFSCOMMANDS["$filesystem"]} $device"
     done
 }
 
-map_disk_guids_to_default_mointpoints() {
-    print_h0 "Determine default mountpoints"
+get_existing_filesystem_type() {
+    local device=$1
+    lsblk -o PATH,FSTYPE | grep "$device" | awk '{ print $2 }'
+}
 
+get_default_filesystem_type() {
+    local guid=$1
+    case $guid in
+    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b") echo "vfat" ;;
+    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f") echo "swap" ;;
+    *) echo "ext4" ;;
+    esac
+}
+
+create_filesystem_maps() {
+    [[ -v FILESYSTEMS[@] ]] && return 0
+    local -A devices
+    get_device_guids devices
+    for device in "${!devices[@]}"; do
+        local existing_fs
+        existing_fs=$(get_existing_filesystem_type "$device")
+        CURRENT_FILESYSTEMS["$device"]="$existing_fs"
+        if [[ -z "$existing_fs" ]]; then
+            local guid="${devices["$device"]}"
+            CONFIG_FILESYSTEMS["$device"]=$(get_default_filesystem_type "$guid")
+        else
+            CONFIG_FILESYSTEMS["$device"]=""
+        fi
+    done
+}
+
+create_mointpoints_map() {
+    [[ -v CONFIG_MOUNTPOINTS[@] ]] && return 0
     local -A devices
     get_device_guids devices
 
     for device in "${!devices[@]}"; do
         local guid="${devices["$device"]}"
-        local mointpoint="${GUID_MOINTPOINTS["$guid"]}"
-        log "device=${device}; guid=${guid}; mointpoint=${mointpoint}"
-        MOUNTPOINTS["$device"]="$mointpoint"
+        local mointpoint="${GUID_MOINTPOINTS["$guid"]:-}"
+        CONFIG_MOUNTPOINTS["$device"]="$mointpoint"
     done
 }
 
@@ -151,8 +175,8 @@ mount_additional_partition() {
 }
 
 get_root_partition_device() {
-    for device in "${!MOUNTPOINTS[@]}"; do
-        local mountpoint="${MOUNTPOINTS["$device"]}"
+    for device in "${!CONFIG_MOUNTPOINTS[@]}"; do
+        local mountpoint="${CONFIG_MOUNTPOINTS["$device"]}"
         if [[ "$mountpoint" = "/" ]]; then
             echo "$device"
             return 0
@@ -169,8 +193,8 @@ mount_partitions() {
     print_h1 "Mount $root_partition_device as root partition"
     mount "$root_partition_device" /mnt
 
-    for device in "${!MOUNTPOINTS[@]}"; do
-        mount_additional_partition "$device" "${MOUNTPOINTS["$device"]}"
+    for device in "${!CONFIG_MOUNTPOINTS[@]}"; do
+        mount_additional_partition "$device" "${CONFIG_MOUNTPOINTS["$device"]}"
     done
 }
 
@@ -182,8 +206,8 @@ install_base_packages() {
 }
 
 swapon_all_swap_partitions() {
-    for device in "${!MOUNTPOINTS[@]}"; do
-        local mountpoint="${MOUNTPOINTS["$device"]}"
+    for device in "${!CONFIG_MOUNTPOINTS[@]}"; do
+        local mountpoint="${CONFIG_MOUNTPOINTS["$device"]}"
         if [[ "$mountpoint" = "SWAP" ]]; then
             print_h1 "swapon ${device}"
             swapon "$device"
@@ -298,9 +322,7 @@ install_arch() {
 
     update_systemclock
 
-    map_disk_guids_to_default_mkfscommands
     format_partitions
-    map_disk_guids_to_default_mointpoints
     mount_partitions
 
     install_base_packages
@@ -349,22 +371,12 @@ confirm() {
     whiptail --yesno "$text" "${DIALOG_SIZE[@]}" --title "$title" --yes-button "Ok" --no-button "$BACK_BUTTON_TEXT"
 }
 
-dialog_welcome() {
-    local title="Minimal Arch Installer"
-    local text="Bash script to install Arch"
-    if confirm "$title" "$text"; then
-        NEXT_WIZARD_STEP=dialog_partition_disk_menu
-    else
-        exit 1
-    fi
-}
-
 dialog_partition_disk_menu() {
     local -a menu_entries=(
+        "dialog_edit_partitions_menu" "Use existing partition layout"
         "dialog_select_disk" "Select a disk and create a new GPT with default partition layout"
-        "dialog_ask_format" "Skip and use existing partition layout"
     )
-    NEXT_WIZARD_STEP=$(menu "Partition disk" "Choose an option" "${menu_entries[@]}") || NEXT_WIZARD_STEP=dialog_welcome
+    NEXT_WIZARD_STEP=$(menu "Minimal Arch Installer" "Partition disk" "${menu_entries[@]}") || exit 1
 }
 
 dialog_select_disk() {
@@ -452,16 +464,105 @@ dialog_create_default_partition_layout() {
         sleep 1
     } | whiptail --gauge "Create new GPT" 6 78 0 --title "$title"
 
-    NEXT_WIZARD_STEP="dialog_ask_format"
+    NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
 
-dialog_ask_format() {
-    # TODO
-    NEXT_WIZARD_STEP="dialog_ask_hostname"
+# get_guid() {
+#     local device=$1
+#     local -i part_number=$2
+#     sgdisk "--info=$part_number" "$device" | awk '/Partition GUID code/ { print $4 }'
+# }
+
+get_partitions() {
+    local -A partitions
+    get_partition_sizes partitions
+    for partition in "${!partitions[@]}"; do
+        echo "dialog_edit_partition_menu $partition"
+        printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "$partition" "${partitions["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}" \
+            "${CURRENT_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}"
+    done
+}
+
+dialog_edit_partitions_menu() {
+    create_filesystem_maps
+    create_mointpoints_map
+    local header
+    header=$(printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "Partition" "Size" "Mountpoint" "current FS" "format FS")
+    local -a partitions
+    mapfile -t partitions < <(get_partitions)
+    NEXT_WIZARD_STEP=$(menu "Edit Partitions" "$header" "${partitions[@]}" "dialog_ask_hostname" "$PROCEED_MENU_ENTRY") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
+}
+
+dialog_edit_partition_menu() {
+    local partition="$1"
+    local -a actions=(
+        "dialog_ask_mountpoint $partition" "mountpoint [${CONFIG_MOUNTPOINTS["$partition"]}]"
+        "dialog_ask_new_filesystem_type $partition" "format filesystem [current '${CURRENT_FILESYSTEMS["$partition"]}' will be formated to '${CONFIG_FILESYSTEMS["$partition"]}']"
+        "dialog_edit_partitions_menu" "$PROCEED_MENU_ENTRY"
+    )
+    NEXT_WIZARD_STEP=$(menu "Partition" "$partition" "${actions[@]}") || NEXT_WIZARD_STEP=dialog_edit_partitions_menu
+}
+
+generate_mountpoint_entires() {
+    echo ""
+    echo "DO NOT MOUNT"
+    if [[ ${CONFIG_MOUNTPOINTS["$partition"]} == "" ]]; then
+        echo "ON"
+    else
+        echo "OFF"
+    fi
+    for mountpoint in "${GUID_MOINTPOINTS[@]}"; do
+        echo "$mountpoint"
+        echo "$mountpoint"
+        if [[ ${CONFIG_MOUNTPOINTS["$partition"]} == "$mountpoint" ]]; then
+            echo "ON"
+        else
+            echo "OFF"
+        fi
+    done
+}
+
+dialog_ask_mountpoint() {
+    local partition="$1"
+    local -a mountpoints_entries
+    mapfile -t mountpoints_entries < <(generate_mountpoint_entires)
+    if mountpoint="$(radiolist "Mountpoint" "$partition: ${CONFIG_MOUNTPOINTS["$partition"]}" "--notags" "${mountpoints_entries[@]}")"; then
+        CONFIG_MOUNTPOINTS["$partition"]="$mountpoint"
+    fi
+    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
+}
+
+generate_filesystem_type_entires() {
+    echo ""
+    echo "DO NOT FORMAT"
+    if [[ ${CONFIG_FILESYSTEMS["$partition"]} == "" ]]; then
+        echo "ON"
+    else
+        echo "OFF"
+    fi
+    for filesystem_type in "${!MKFSCOMMANDS[@]}"; do
+        echo "$filesystem_type"
+        echo "$filesystem_type"
+        if [[ ${CONFIG_FILESYSTEMS["$partition"]} == "$filesystem_type" ]]; then
+            echo "ON"
+        else
+            echo "OFF"
+        fi
+    done
+}
+
+dialog_ask_new_filesystem_type() {
+    local partition="$1"
+    local -a filesystem_type_entires
+    mapfile -t filesystem_type_entires < <(generate_filesystem_type_entires)
+    if filesystem_type="$(radiolist "Filesystem type" "$partition: ${CURRENT_FILESYSTEMS["$partition"]}" "--notags" "${filesystem_type_entires[@]}")"; then
+        CONFIG_FILESYSTEMS["$partition"]="$filesystem_type"
+    fi
+    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
 }
 
 dialog_ask_hostname() {
-    NEXT_WIZARD_STEP=dialog_partition_disk_menu
+    NEXT_WIZARD_STEP=dialog_edit_partitions_menu
     local hostname
     if hostname="$(inputbox "Hostname" "" "${CONFIG[HOSTNAME]}")"; then
         CONFIG[HOSTNAME]="$hostname"
