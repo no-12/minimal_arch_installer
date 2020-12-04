@@ -62,6 +62,46 @@ check_if_device_is_mounted() {
     fi
 }
 
+get_default_filesystem_type() {
+    local guid=$1
+    case $guid in
+    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b") echo "vfat" ;;
+    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f") echo "swap" ;;
+    *) echo "ext4" ;;
+    esac
+}
+
+init_partition_data() {
+    [[ -v PARTITIONS[@] ]] && return 0
+    eval "$(lsblk -lnpo TYPE,PATH,SIZE,PARTTYPE,FSTYPE | awk '/part/ {
+        printf "PARTITIONS+=(%s)\n", $2;
+        printf "PARTITION_SIZES[%s]=%s\n", $2, $3;
+        printf "PARTITION_GUIDS[%s]=%s\n", $2, $4;
+        printf "PARTITION_FILESYSTEMS[%s]=%s\n", $2, $5;
+    }')"
+}
+
+init_config_filesystems() {
+    [[ -v CONFIG_FILESYSTEMS[@] ]] && return 0
+    for partition in "${PARTITIONS[@]}"; do
+        if [[ -z ${PARTITION_FILESYSTEMS["$partition"]} ]]; then
+            local guid="${PARTITION_GUIDS["$partition"]}"
+            CONFIG_FILESYSTEMS["$partition"]=$(get_default_filesystem_type "$guid")
+        else
+            CONFIG_FILESYSTEMS["$partition"]=""
+        fi
+    done
+}
+
+init_config_mountpoints() {
+    [[ -v CONFIG_MOUNTPOINTS[@] ]] && return 0
+    for partition in "${PARTITIONS[@]}"; do
+        local guid="${PARTITION_GUIDS["$partition"]}"
+        local mointpoint="${GUID_MOINTPOINTS["$guid"]:-}"
+        CONFIG_MOUNTPOINTS["$partition"]="$mointpoint"
+    done
+}
+
 print_data_lose_warning() {
     printf "
                     +---------------------------------+
@@ -111,16 +151,6 @@ update_systemclock() {
     timedatectl set-ntp true
 }
 
-init_partition_data() {
-    [[ -v PARTITIONS[@] ]] && return 0
-    eval "$(lsblk -lnpo TYPE,PATH,SIZE,PARTTYPE,FSTYPE | awk '/part/ {
-        printf "PARTITIONS+=(%s)\n", $2;
-        printf "PARTITION_SIZES[%s]=%s\n", $2, $3;
-        printf "PARTITION_GUIDS[%s]=%s\n", $2, $4;
-        printf "PARTITION_FILESYSTEMS[%s]=%s\n", $2, $5;
-    }')"
-}
-
 format_partitions() {
     print_h0 "Format partitions"
     for device in "${!FILESYSTEMS[@]}"; do
@@ -129,36 +159,6 @@ format_partitions() {
         eval "${MKFSCOMMANDS["$filesystem"]} $device"
     done
     PARTITIONS=()
-}
-
-get_default_filesystem_type() {
-    local guid=$1
-    case $guid in
-    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b") echo "vfat" ;;
-    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f") echo "swap" ;;
-    *) echo "ext4" ;;
-    esac
-}
-
-init_config_filesystems() {
-    [[ -v CONFIG_FILESYSTEMS[@] ]] && return 0
-    for partition in "${PARTITIONS[@]}"; do
-        if [[ -z ${PARTITION_FILESYSTEMS["$partition"]} ]]; then
-            local guid="${PARTITION_GUIDS["$partition"]}"
-            CONFIG_FILESYSTEMS["$partition"]=$(get_default_filesystem_type "$guid")
-        else
-            CONFIG_FILESYSTEMS["$partition"]=""
-        fi
-    done
-}
-
-init_config_mountpoints() {
-    [[ -v CONFIG_MOUNTPOINTS[@] ]] && return 0
-    for partition in "${PARTITIONS[@]}"; do
-        local guid="${PARTITION_GUIDS["$partition"]}"
-        local mointpoint="${GUID_MOINTPOINTS["$guid"]:-}"
-        CONFIG_MOUNTPOINTS["$partition"]="$mointpoint"
-    done
 }
 
 mount_additional_partition() {
@@ -438,11 +438,9 @@ The following partitions will be created:
 
 $(print_data_lose_warning "$disk")
 EOM
-
-    NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
-    if confirm "$text"; then
-        NEXT_WIZARD_STEP="dialog_create_default_partition_layout $disk $efi_size $swap_size $root_size"
-    fi
+    confirm "$text" &&
+        NEXT_WIZARD_STEP="dialog_create_default_partition_layout $disk $efi_size $swap_size $root_size" ||
+        NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
 }
 
 dialog_create_default_partition_layout() {
@@ -494,7 +492,8 @@ dialog_edit_partitions_menu() {
     local -a partition_menu_entries
     mapfile -t partition_menu_entries < <(get_partition_menu_entries)
     local proceed_menu_entry="                            ===> Proceed ===>                            "
-    NEXT_WIZARD_STEP=$(menu "$header" "${partition_menu_entries[@]}" "dialog_ask_hostname" "$proceed_menu_entry") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
+    NEXT_WIZARD_STEP=$(menu "$header" "${partition_menu_entries[@]}" "dialog_ask_hostname" "$proceed_menu_entry") ||
+        NEXT_WIZARD_STEP=dialog_partition_disk_menu
 }
 
 dialog_edit_partition_menu() {
@@ -527,12 +526,10 @@ generate_mountpoint_entires() {
 
 dialog_ask_mountpoint() {
     local partition="$1"
+    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
     local -a mountpoints_entries
     mapfile -t mountpoints_entries < <(generate_mountpoint_entires)
-    if mountpoint="$(radiolist "Select a mountpoint for $partition" 22 "--notags" "${mountpoints_entries[@]}")"; then
-        CONFIG_MOUNTPOINTS["$partition"]="$mountpoint"
-    fi
-    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
+    CONFIG_MOUNTPOINTS["$partition"]="$(radiolist "Select a mountpoint for $partition" 22 "--notags" "${mountpoints_entries[@]}")"
 }
 
 generate_filesystem_type_entires() {
@@ -556,55 +553,40 @@ generate_filesystem_type_entires() {
 
 dialog_ask_new_filesystem_type() {
     local partition="$1"
+    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
     local -a filesystem_type_entires
     mapfile -t filesystem_type_entires < <(generate_filesystem_type_entires)
-    if filesystem_type="$(radiolist "Select a filesystem for $partition [current filesystem: ${PARTITION_FILESYSTEMS["$partition"]}]" 22 "--notags" "${filesystem_type_entires[@]}")"; then
-        CONFIG_FILESYSTEMS["$partition"]="$filesystem_type"
-    fi
-    NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
+    CONFIG_FILESYSTEMS["$partition"]="$(radiolist "Select a filesystem for $partition [current filesystem: ${PARTITION_FILESYSTEMS["$partition"]}]" 22 "--notags" "${filesystem_type_entires[@]}")"
 }
 
 dialog_ask_hostname() {
-    NEXT_WIZARD_STEP=dialog_edit_partitions_menu
-    local hostname
-    if hostname="$(inputbox "Hostname" "" "${CONFIG[HOSTNAME]}")"; then
-        CONFIG[HOSTNAME]="$hostname"
-        NEXT_WIZARD_STEP=dialog_ask_username
-    fi
+    NEXT_WIZARD_STEP=dialog_ask_username
+    CONFIG[HOSTNAME]="$(inputbox "Hostname" "${CONFIG[HOSTNAME]}")" ||
+        NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
 
 dialog_ask_username() {
-    NEXT_WIZARD_STEP=dialog_ask_hostname
+    NEXT_WIZARD_STEP=dialog_ask_timezone
     local text="Enter a user that will be created. The password must be set at the end of the installation"
-    local username
-    if username="$(inputbox "$text" "${CONFIG[USERNAME]}")"; then
-        CONFIG[USERNAME]="$username"
-        NEXT_WIZARD_STEP=dialog_ask_timezone
-    fi
+    CONFIG[USERNAME]="$(inputbox "$text" "${CONFIG[USERNAME]}")" ||
+        NEXT_WIZARD_STEP=dialog_ask_hostname
 }
 
 dialog_ask_timezone() {
-    NEXT_WIZARD_STEP=dialog_ask_username
     local -a timezones
     mapfile -t timezones < <(timedatectl list-timezones | awk -v current="${CONFIG[TIMEZONE]}" 'BEGIN{OFS="\n";} {
         state="off";
         if ( $1 == current ) state="on";
         print $1,"|",state;
     }')
-    local timezone
-    if timezone="$(radiolist "Select the local timezone" 22 "${timezones[@]}")"; then
-        CONFIG[TIMEZONE]="$timezone"
-        NEXT_WIZARD_STEP=dialog_ask_additional_packages
-    fi
+    NEXT_WIZARD_STEP=dialog_ask_additional_packages
+    CONFIG[TIMEZONE]="$(radiolist "Select the local timezone" 22 "${timezones[@]}")" ||
+        NEXT_WIZARD_STEP=dialog_ask_username
 }
 
 dialog_ask_additional_packages() {
-    NEXT_WIZARD_STEP=dialog_ask_timezone
-    local additional_packages
-    if additional_packages="$(inputbox "Additional packages that will be installed" "${CONFIG[ADDITIONAL_PACKAGES]}")"; then
-        CONFIG[ADDITIONAL_PACKAGES]="$additional_packages"
-        NEXT_WIZARD_STEP=dialog_ask_confirm
-    fi
+    NEXT_WIZARD_STEP=dialog_ask_confirm
+    CONFIG[ADDITIONAL_PACKAGES]="$(inputbox "Additional packages that will be installed" "${CONFIG[ADDITIONAL_PACKAGES]}")" || NEXT_WIZARD_STEP=dialog_ask_timezone
 }
 
 dialog_ask_confirm() {
@@ -614,7 +596,7 @@ dialog_ask_confirm() {
     config=$(print_config)
     if confirm "Installation will start after confirmation.\\n\\n$config"; then
         if is_config_valid; then
-            # install_arch
+            install_arch
             exit 0
         fi
         NEXT_WIZARD_STEP=dialog_ask_confirm
