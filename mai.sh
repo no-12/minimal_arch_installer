@@ -16,7 +16,10 @@ declare -rA "MKFSCOMMANDS=(
     [ext4]='mkfs.ext4 -F'
 )"
 
-declare -A CURRENT_FILESYSTEMS
+declare -a PARTITIONS
+declare -A PARTITION_SIZES
+declare -A PARTITION_GUIDS
+declare -A PARTITION_FILESYSTEMS
 
 declare -A "CONFIG=(
     [HOSTNAME]=
@@ -68,6 +71,14 @@ print_config() {
             printf "%-20s --> %s\\n" "$key" "$value"
         fi
     done
+    for key in "${!CONFIG[@]}"; do
+        local value="${CONFIG["$key"]}"
+        if [[ -z $value ]]; then
+            printf "%-20s --> *****NOT SET*****\\n" "$key"
+        else
+            printf "%-20s --> %s\\n" "$key" "$value"
+        fi
+    done
 }
 
 is_config_valid() {
@@ -89,16 +100,14 @@ update_systemclock() {
     timedatectl set-ntp true
 }
 
-get_device_guids() {
-    # shellcheck disable=SC2034
-    local -n devices_guids_ref="$1"
-    eval "$(lsblk -lnpo TYPE,NAME,PARTTYPE | awk '/part/ { printf "devices_guids_ref[%s]=%s\n", $2, $3 }')"
-}
-
-get_partition_sizes() {
-    # shellcheck disable=SC2034
-    local -n partitions_sizes_ref="$1"
-    eval "$(lsblk -lnpo TYPE,NAME,SIZE | awk '/part/ { printf "partitions_sizes_ref[%s]=%s\n", $2, $3 }')"
+init_partition_data() {
+    [[ -v PARTITIONS[@] ]] && return 0
+    eval "$(lsblk -lnpo TYPE,PATH,SIZE,PARTTYPE,FSTYPE | awk '/part/ {
+        printf "PARTITIONS+=(%s)\n", $2;
+        printf "PARTITION_SIZES[%s]=%s\n", $2, $3;
+        printf "PARTITION_GUIDS[%s]=%s\n", $2, $4;
+        printf "PARTITION_FILESYSTEMS[%s]=%s\n", $2, $5;
+    }')"
 }
 
 format_partitions() {
@@ -108,11 +117,7 @@ format_partitions() {
         print_h1 "Format device: ${MKFSCOMMANDS["$filesystem"]} $device"
         eval "${MKFSCOMMANDS["$filesystem"]} $device"
     done
-}
-
-get_existing_filesystem_type() {
-    local device=$1
-    lsblk -o PATH,FSTYPE | grep "$device" | awk '{ print $2 }'
+    PARTITIONS=()
 }
 
 get_default_filesystem_type() {
@@ -124,32 +129,24 @@ get_default_filesystem_type() {
     esac
 }
 
-create_filesystem_maps() {
-    [[ -v FILESYSTEMS[@] ]] && return 0
-    local -A devices
-    get_device_guids devices
-    for device in "${!devices[@]}"; do
-        local existing_fs
-        existing_fs=$(get_existing_filesystem_type "$device")
-        CURRENT_FILESYSTEMS["$device"]="$existing_fs"
-        if [[ -z "$existing_fs" ]]; then
-            local guid="${devices["$device"]}"
-            CONFIG_FILESYSTEMS["$device"]=$(get_default_filesystem_type "$guid")
+init_config_filesystems() {
+    [[ -v CONFIG_FILESYSTEMS[@] ]] && return 0
+    for partition in "${PARTITIONS[@]}"; do
+        if [[ -z ${PARTITION_FILESYSTEMS["$partition"]} ]]; then
+            local guid="${PARTITION_GUIDS["$partition"]}"
+            CONFIG_FILESYSTEMS["$partition"]=$(get_default_filesystem_type "$guid")
         else
-            CONFIG_FILESYSTEMS["$device"]=""
+            CONFIG_FILESYSTEMS["$partition"]=""
         fi
     done
 }
 
-create_mointpoints_map() {
+init_config_mountpoints() {
     [[ -v CONFIG_MOUNTPOINTS[@] ]] && return 0
-    local -A devices
-    get_device_guids devices
-
-    for device in "${!devices[@]}"; do
-        local guid="${devices["$device"]}"
+    for partition in "${PARTITIONS[@]}"; do
+        local guid="${PARTITION_GUIDS["$partition"]}"
         local mointpoint="${GUID_MOINTPOINTS["$guid"]:-}"
-        CONFIG_MOUNTPOINTS["$device"]="$mointpoint"
+        CONFIG_MOUNTPOINTS["$partition"]="$mointpoint"
     done
 }
 
@@ -467,37 +464,31 @@ dialog_create_default_partition_layout() {
     NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
 
-# get_guid() {
-#     local device=$1
-#     local -i part_number=$2
-#     sgdisk "--info=$part_number" "$device" | awk '/Partition GUID code/ { print $4 }'
-# }
-
-get_partitions() {
-    local -A partitions
-    get_partition_sizes partitions
-    for partition in "${!partitions[@]}"; do
+get_partition_menu_entries() {
+    for partition in "${PARTITIONS[@]}"; do
         echo "dialog_edit_partition_menu $partition"
-        printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "$partition" "${partitions["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}" \
-            "${CURRENT_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}"
+        printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "$partition" "${PARTITION_SIZES["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}" \
+            "${PARTITION_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}"
     done
 }
 
 dialog_edit_partitions_menu() {
-    create_filesystem_maps
-    create_mointpoints_map
+    init_partition_data
+    init_config_filesystems
+    init_config_mountpoints
+
     local header
     header=$(printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "Partition" "Size" "Mountpoint" "current FS" "format FS")
-    local -a partitions
-    mapfile -t partitions < <(get_partitions)
-    NEXT_WIZARD_STEP=$(menu "Edit Partitions" "$header" "${partitions[@]}" "dialog_ask_hostname" "$PROCEED_MENU_ENTRY") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
+    local -a partition_menu_entries
+    mapfile -t partition_menu_entries < <(get_partition_menu_entries)
+    NEXT_WIZARD_STEP=$(menu "Edit Partitions" "$header" "${partition_menu_entries[@]}" "dialog_ask_hostname" "$PROCEED_MENU_ENTRY") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
 }
 
 dialog_edit_partition_menu() {
     local partition="$1"
     local -a actions=(
         "dialog_ask_mountpoint $partition" "mountpoint [${CONFIG_MOUNTPOINTS["$partition"]}]"
-        "dialog_ask_new_filesystem_type $partition" "format filesystem [current '${CURRENT_FILESYSTEMS["$partition"]}' will be formated to '${CONFIG_FILESYSTEMS["$partition"]}']"
+        "dialog_ask_new_filesystem_type $partition" "format filesystem [current '${PARTITION_FILESYSTEMS["$partition"]}' will be formated to '${CONFIG_FILESYSTEMS["$partition"]}']"
         "dialog_edit_partitions_menu" "$PROCEED_MENU_ENTRY"
     )
     NEXT_WIZARD_STEP=$(menu "Partition" "$partition" "${actions[@]}") || NEXT_WIZARD_STEP=dialog_edit_partitions_menu
@@ -555,7 +546,7 @@ dialog_ask_new_filesystem_type() {
     local partition="$1"
     local -a filesystem_type_entires
     mapfile -t filesystem_type_entires < <(generate_filesystem_type_entires)
-    if filesystem_type="$(radiolist "Filesystem type" "$partition: ${CURRENT_FILESYSTEMS["$partition"]}" "--notags" "${filesystem_type_entires[@]}")"; then
+    if filesystem_type="$(radiolist "Filesystem type" "$partition: ${PARTITION_FILESYSTEMS["$partition"]}" "--notags" "${filesystem_type_entires[@]}")"; then
         CONFIG_FILESYSTEMS["$partition"]="$filesystem_type"
     fi
     NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
