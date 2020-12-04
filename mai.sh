@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
+declare -r TITLE="Minimal Arch Installer"
 declare -ra DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
-declare -r PROCEED_MENU_ENTRY="                            ===> Proceed ===>                            "
 declare -rA "GUID_MOINTPOINTS=(
     [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/boot
     [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=SWAP
@@ -60,6 +60,15 @@ check_if_device_is_mounted() {
         log_error "$disk is mounted"
         exit 1
     fi
+}
+
+print_data_lose_warning() {
+    printf "
+                    +---------------------------------+
+                    | WARNING: All data on %-10s |
+                    |          will be lost forever   |
+                    +---------------------------------+" \
+        "${1:-"this disk"}"
 }
 
 print_config() {
@@ -340,50 +349,53 @@ install_arch() {
 }
 
 ################################
-# wizard stuff
+# generic dialogs
 ################################
 
 menu() {
-    local title=$1
-    local text=$2
-    shift 2
-    whiptail --menu "$text" "${DIALOG_SIZE[@]}" 20 --title "$title" --cancel-button "$BACK_BUTTON_TEXT" --notags "$@" 3>&1 1>&2 2>&3
+    local text=$1
+    shift 1
+    whiptail --menu "$text" "${DIALOG_SIZE[@]}" 20 --title "$TITLE" --cancel-button "$BACK_BUTTON_TEXT" --notags "$@" 3>&1 1>&2 2>&3
 }
 
 radiolist() {
-    local title=$1
-    local text=$2
+    local text=$1
+    local height=$2
     shift 2
-    whiptail --radiolist "$text" "${DIALOG_SIZE[@]}" 20 --title "$title" --cancel-button "$BACK_BUTTON_TEXT" "$@" 3>&1 1>&2 2>&3
+    whiptail --radiolist "$text" "${DIALOG_SIZE[@]}" "$height" --title "$TITLE" --cancel-button "$BACK_BUTTON_TEXT" "$@" 3>&1 1>&2 2>&3
 }
 
 inputbox() {
-    local title=$1
-    local text=$2
-    local default_value=$3
-    whiptail --inputbox "$text" "${DIALOG_SIZE[@]}" "$default_value" --title "$title" --cancel-button "$BACK_BUTTON_TEXT" 3>&1 1>&2 2>&3
+    local text=$1
+    local default_value=$2
+    whiptail --inputbox "$text" "${DIALOG_SIZE[@]}" "$default_value" --title "$TITLE" --cancel-button "$BACK_BUTTON_TEXT" 3>&1 1>&2 2>&3
 }
 
 confirm() {
-    local title=$1
-    local text=$2
-    whiptail --yesno "$text" "${DIALOG_SIZE[@]}" --title "$title" --yes-button "Ok" --no-button "$BACK_BUTTON_TEXT"
+    local text=$1
+    whiptail --yesno "$text" "${DIALOG_SIZE[@]}" --title "$TITLE" --yes-button "Ok" --no-button "$BACK_BUTTON_TEXT"
 }
+
+################################
+# wizard
+################################
 
 dialog_partition_disk_menu() {
     local -a menu_entries=(
         "dialog_edit_partitions_menu" "Use existing partition layout"
         "dialog_select_disk" "Select a disk and create a new GPT with default partition layout"
     )
-    NEXT_WIZARD_STEP=$(menu "Minimal Arch Installer" "Partition disk" "${menu_entries[@]}") || exit 1
+    NEXT_WIZARD_STEP=$(menu "Disk Partitioning" "${menu_entries[@]}") || exit 1
 }
 
 dialog_select_disk() {
     local -a disks
-    mapfile -t disks < <(lsblk -dno TYPE,PATH,SIZE | awk 'BEGIN{OFS="\n";} /disk/ {print $2,$3,"off";}')
+    mapfile -t disks < <(lsblk -dno TYPE,PATH,SIZE | awk 'BEGIN{OFS="\n";} /disk/ {print $2,$2 $3,"off";}')
     local disk
     NEXT_WIZARD_STEP=dialog_partition_disk_menu
-    if disk=$(radiolist "Create default partition layout" "Select a disk" "${disks[@]}"); then
+    local text
+    text="Select a disk on which the default partition layout will be created\\n$(print_data_lose_warning)"
+    if disk=$(radiolist "$text" 18 "${disks[@]}"); then
         NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
         if [ -z "$disk" ]; then
             NEXT_WIZARD_STEP=dialog_select_disk
@@ -395,7 +407,7 @@ dialog_ask_root_size() {
     local disk="$1"
     local root_size
     NEXT_WIZARD_STEP="dialog_select_disk ${disk}"
-    if root_size=$(inputbox "Create default partition layout" "Enter root partition size" "50GiB"); then
+    if root_size=$(inputbox "Enter the root partition size" "50GiB"); then
         NEXT_WIZARD_STEP="dialog_confirm_disk ${disk} ${root_size}"
         if [ -z "$root_size" ]; then
             NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
@@ -416,20 +428,19 @@ dialog_confirm_disk() {
     local swap_size
     swap_size="$(get_ram_size_in_KiB /proc/meminfo)"
 
-    local title="Create default partition layout"
     local text
     read -r -d '' text <<-EOM || true
-WARNING: All data on ${disk} will be lost forever
-
 The following partitions will be created:
  * efi  --> $efi_size
  * swap --> $swap_size (same as RAM size)
  * root --> $root_size
  * home --> remaining disk space
+
+$(print_data_lose_warning "$disk")
 EOM
 
     NEXT_WIZARD_STEP="dialog_ask_root_size ${disk}"
-    if confirm "$title" "$text"; then
+    if confirm "$text"; then
         NEXT_WIZARD_STEP="dialog_create_default_partition_layout $disk $efi_size $swap_size $root_size"
     fi
 }
@@ -442,26 +453,25 @@ dialog_create_default_partition_layout() {
 
     check_if_device_is_mounted "$disk"
 
-    local title="Create default partition layout"
     {
-        echo -e "XXX\n0\nCreate new GPT\nXXX"
+        echo -e "XXX\n0\nCreate new GPT on $disk\nXXX"
         sgdisk -Z "$disk"
 
-        echo -e "XXX\n20\nCreate efi partition\nXXX"
+        echo -e "XXX\n20\nCreate efi partition on $disk\nXXX"
         sgdisk --new=0:0:+"$efi_size" --typecode=0:c12a7328-f81f-11d2-ba4b-00a0c93ec93b "$disk"
 
-        echo -e "XXX\n40\nCreate swap partition\nXXX"
+        echo -e "XXX\n40\nCreate swap partition on $disk\nXXX"
         sgdisk --new=0:0:+"$swap_size" --typecode=0:0657fd6d-a4ab-43c4-84e5-0933c84b4f4f "$disk"
 
-        echo -e "XXX\n60\nCreate root partition\nXXX"
+        echo -e "XXX\n60\nCreate root partition on $disk\nXXX"
         sgdisk --new=0:0:+"$root_size" --typecode=0:4f68bce3-e8cd-4db1-96e7-fbcaf984b709 "$disk"
 
-        echo -e "XXX\n80\nCreate home partition\nXXX"
+        echo -e "XXX\n80\nCreate home partition on $disk\nXXX"
         sgdisk --new=0:0:0 --typecode=0:933ac7e1-2eb4-4f13-b844-0e14e2aef915 "$disk"
 
         echo -e "XXX\n100\nFinished\nXXX"
         sleep 1
-    } | whiptail --gauge "Create new GPT" 6 78 0 --title "$title"
+    } | whiptail --gauge "Create new GPT" 6 78 0 --title "$TITLE"
 
     NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
@@ -480,20 +490,20 @@ dialog_edit_partitions_menu() {
     init_config_mountpoints
 
     local header
-    header=$(printf "%-17s %-10s %-17s %-10s ---> %-10s\n" "Partition" "Size" "Mountpoint" "current FS" "format FS")
+    header=$(printf "%-17s %-10s %-17s %-10s ---> %-10s" "Partition" "Size" "Mountpoint" "current FS" "format FS")
     local -a partition_menu_entries
     mapfile -t partition_menu_entries < <(get_partition_menu_entries)
-    NEXT_WIZARD_STEP=$(menu "Edit Partitions" "$header" "${partition_menu_entries[@]}" "dialog_ask_hostname" "$PROCEED_MENU_ENTRY") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
+    local proceed_menu_entry="                            ===> Proceed ===>                            "
+    NEXT_WIZARD_STEP=$(menu "$header" "${partition_menu_entries[@]}" "dialog_ask_hostname" "$proceed_menu_entry") || NEXT_WIZARD_STEP=dialog_partition_disk_menu
 }
 
 dialog_edit_partition_menu() {
     local partition="$1"
-    local -a actions=(
+    local -a menut_entires=(
         "dialog_ask_mountpoint $partition" "mountpoint [${CONFIG_MOUNTPOINTS["$partition"]}]"
-        "dialog_ask_new_filesystem_type $partition" "format filesystem [current '${PARTITION_FILESYSTEMS["$partition"]}' will be formated to '${CONFIG_FILESYSTEMS["$partition"]}']"
-        "dialog_edit_partitions_menu" "$PROCEED_MENU_ENTRY"
+        "dialog_ask_new_filesystem_type $partition" "filesystem [current: '${PARTITION_FILESYSTEMS["$partition"]}' will be formated to '${CONFIG_FILESYSTEMS["$partition"]}']"
     )
-    NEXT_WIZARD_STEP=$(menu "Partition" "$partition" "${actions[@]}") || NEXT_WIZARD_STEP=dialog_edit_partitions_menu
+    NEXT_WIZARD_STEP=$(menu "$partition" "${menut_entires[@]}") || NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
 
 generate_mountpoint_entires() {
@@ -519,7 +529,7 @@ dialog_ask_mountpoint() {
     local partition="$1"
     local -a mountpoints_entries
     mapfile -t mountpoints_entries < <(generate_mountpoint_entires)
-    if mountpoint="$(radiolist "Mountpoint" "$partition: ${CONFIG_MOUNTPOINTS["$partition"]}" "--notags" "${mountpoints_entries[@]}")"; then
+    if mountpoint="$(radiolist "Select a mountpoint for $partition" 22 "--notags" "${mountpoints_entries[@]}")"; then
         CONFIG_MOUNTPOINTS["$partition"]="$mountpoint"
     fi
     NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
@@ -548,7 +558,7 @@ dialog_ask_new_filesystem_type() {
     local partition="$1"
     local -a filesystem_type_entires
     mapfile -t filesystem_type_entires < <(generate_filesystem_type_entires)
-    if filesystem_type="$(radiolist "Filesystem type" "$partition: ${PARTITION_FILESYSTEMS["$partition"]}" "--notags" "${filesystem_type_entires[@]}")"; then
+    if filesystem_type="$(radiolist "Select a filesystem for $partition [current filesystem: ${PARTITION_FILESYSTEMS["$partition"]}]" 22 "--notags" "${filesystem_type_entires[@]}")"; then
         CONFIG_FILESYSTEMS["$partition"]="$filesystem_type"
     fi
     NEXT_WIZARD_STEP="dialog_edit_partition_menu $partition"
@@ -565,9 +575,9 @@ dialog_ask_hostname() {
 
 dialog_ask_username() {
     NEXT_WIZARD_STEP=dialog_ask_hostname
-    local text="User will be created and the password must be set at the end of the installation"
+    local text="Enter a user that will be created. The password must be set at the end of the installation"
     local username
-    if username="$(inputbox "Username" "$text" "${CONFIG[USERNAME]}")"; then
+    if username="$(inputbox "$text" "${CONFIG[USERNAME]}")"; then
         CONFIG[USERNAME]="$username"
         NEXT_WIZARD_STEP=dialog_ask_timezone
     fi
@@ -582,7 +592,7 @@ dialog_ask_timezone() {
         print $1,"|",state;
     }')
     local timezone
-    if timezone="$(radiolist "Timezone" "Select the local timezone" "${timezones[@]}")"; then
+    if timezone="$(radiolist "Select the local timezone" 22 "${timezones[@]}")"; then
         CONFIG[TIMEZONE]="$timezone"
         NEXT_WIZARD_STEP=dialog_ask_additional_packages
     fi
@@ -590,9 +600,8 @@ dialog_ask_timezone() {
 
 dialog_ask_additional_packages() {
     NEXT_WIZARD_STEP=dialog_ask_timezone
-    local text="Install additional packages"
     local additional_packages
-    if additional_packages="$(inputbox "Additional packages" "$text" "${CONFIG[ADDITIONAL_PACKAGES]}")"; then
+    if additional_packages="$(inputbox "Additional packages that will be installed" "${CONFIG[ADDITIONAL_PACKAGES]}")"; then
         CONFIG[ADDITIONAL_PACKAGES]="$additional_packages"
         NEXT_WIZARD_STEP=dialog_ask_confirm
     fi
@@ -603,10 +612,9 @@ dialog_ask_confirm() {
 
     local config
     config=$(print_config)
-    local text="Installation will start after confirmation.\\nAll parameters must be set\\n\\n$config"
-    if confirm "Start installation" "$text"; then
+    if confirm "Installation will start after confirmation.\\n\\n$config"; then
         if is_config_valid; then
-            install_arch
+            # install_arch
             exit 0
         fi
         NEXT_WIZARD_STEP=dialog_ask_confirm
