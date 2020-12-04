@@ -63,14 +63,16 @@ check_if_device_is_mounted() {
 }
 
 print_config() {
-    for key in "${!CONFIG[@]}"; do
-        local value="${CONFIG["$key"]}"
-        if [[ -z $value ]]; then
-            printf "%-20s --> *****NOT SET*****\\n" "$key"
-        else
-            printf "%-20s --> %s\\n" "$key" "$value"
-        fi
+    local horizontal_bar="+------------------+------------+----------+----------+------------------+"
+    echo "$horizontal_bar"
+    printf "| %-16s | %-10s | %-8s | %-8s | %-16s |\\n" "partition" "size" "curr. FS" "new FS" "mountpoint"
+    echo "$horizontal_bar"
+    for partition in "${PARTITIONS[@]}"; do
+        printf "| %-16s | %-10s | %-8s | %-8s | %-16s |\\n" "$partition" "${PARTITION_SIZES["$partition"]}" "${PARTITION_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}"
     done
+    echo "$horizontal_bar"
+
+    echo -e "\n\nConfig:\n"
     for key in "${!CONFIG[@]}"; do
         local value="${CONFIG["$key"]}"
         if [[ -z $value ]]; then
