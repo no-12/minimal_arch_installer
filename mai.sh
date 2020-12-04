@@ -25,7 +25,7 @@ declare -A "CONFIG=(
     [HOSTNAME]=
     [USERNAME]=
     [TIMEZONE]='Europe/Berlin'
-    [ADDITIONAL_PACKAGES]='git ansible'
+    [ADDITIONAL_PACKAGES]='git vim'
 )"
 declare -A CONFIG_FILESYSTEMS
 declare -A CONFIG_MOUNTPOINTS
