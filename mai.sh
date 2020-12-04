@@ -153,12 +153,15 @@ update_systemclock() {
 
 format_partitions() {
     print_h0 "Format partitions"
-    for device in "${!FILESYSTEMS[@]}"; do
-        local filesystem="${FILESYSTEMS["$device"]}"
-        print_h1 "Format device: ${MKFSCOMMANDS["$filesystem"]} $device"
-        eval "${MKFSCOMMANDS["$filesystem"]} $device"
+    for partition in "${!CONFIG_FILESYSTEMS[@]}"; do
+        log "partition $partition"
+        local filesystem="${CONFIG_FILESYSTEMS["$partition"]}"
+        log "filesystem $filesystem"
+        if [[ -n "$filesystem" ]]; then
+            print_h1 "Format partition: ${MKFSCOMMANDS["$filesystem"]} $partition"
+            eval "${MKFSCOMMANDS["$filesystem"]} $partition"
+        fi
     done
-    PARTITIONS=()
 }
 
 mount_additional_partition() {
@@ -471,6 +474,7 @@ dialog_create_default_partition_layout() {
         sleep 1
     } | whiptail --gauge "Create new GPT" 6 78 0 --title "$TITLE"
 
+    PARTITIONS=()
     NEXT_WIZARD_STEP=dialog_edit_partitions_menu
 }
 
