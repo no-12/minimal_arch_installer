@@ -103,20 +103,21 @@ init_config_mountpoints() {
 
 print_data_lose_warning() {
     printf "
-                    +---------------------------------+
-                    | WARNING: All data on %-10s |
-                    |          will be lost forever   |
-                    +---------------------------------+" \
+                     +-------------------------------+
+                     | WARNING: All data on          |
+                     |          %-20.20s |
+                     |          will be lost forever |
+                     +-------------------------------+" \
         "${1:-"this disk"}"
 }
 
 print_config() {
     local horizontal_bar="+------------------+------------+----------+----------+------------------+"
     echo "$horizontal_bar"
-    printf "| %-16s | %-10s | %-8s | %-8s | %-16s |\\n" "partition" "size" "curr. FS" "new FS" "mountpoint"
+    printf "| %-16.16s | %-10.10s | %-8.8s | %-8.8s | %-16.16s |\\n" "partition" "size" "curr. FS" "new FS" "mountpoint"
     echo "$horizontal_bar"
     for partition in "${PARTITIONS[@]}"; do
-        printf "| %-16s | %-10s | %-8s | %-8s | %-16s |\\n" "$partition" "${PARTITION_SIZES["$partition"]}" "${PARTITION_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}"
+        printf "| %-16.16s | %-10.10s | %-8.8s | %-8.8s | %-16.16s |\\n" "$partition" "${PARTITION_SIZES["$partition"]}" "${PARTITION_FILESYSTEMS["$partition"]}" "${CONFIG_FILESYSTEMS["$partition"]}" "${CONFIG_MOUNTPOINTS["$partition"]}"
     done
     echo "$horizontal_bar"
 
