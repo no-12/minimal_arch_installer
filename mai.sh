@@ -10,6 +10,10 @@ declare -rA "GUID_MOINTPOINTS=(
     [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]=/
     [933ac7e1-2eb4-4f13-b844-0e14e2aef915]=/home
 )"
+declare -rA "GUID_DEFAULT_FILESYSTEM=(
+    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=vfat
+    [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=swap
+)"
 declare -rA "MKFSCOMMANDS=(
     [vfat]='mkfs.fat -F32'
     [swap]='mkswap'
@@ -31,20 +35,20 @@ declare -A CONFIG_FILESYSTEMS
 declare -A CONFIG_MOUNTPOINTS
 declare NEXT_WIZARD_STEP=dialog_partition_disk_menu
 
-print_h0() {
-    echo -e "\\e[42m==> $1\\e[0m" 1>&2
-}
-
-print_h1() {
-    echo -e "\\e[44m===> $1\\e[0m" 1>&2
-}
-
 log() {
     echo -e "$1" 1>&2
 }
 
 log_error() {
-    echo -e "\\e[31mError: $1\e[0m" 1>&2
+    log "\\e[31mError: $1\e[0m"
+}
+
+print_h0() {
+    log "\\e[42m==> $1\\e[0m"
+}
+
+print_h1() {
+    log "\\e[44m===> $1\\e[0m"
 }
 
 generate_file() {
@@ -63,22 +67,17 @@ is_device_mounted() {
 }
 
 get_default_filesystem_type() {
-    local guid=$1
-    case $guid in
-    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b") echo "vfat" ;;
-    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f") echo "swap" ;;
-    *) echo "ext4" ;;
-    esac
+    echo "${GUID_DEFAULT_FILESYSTEM[$1]:-ext4}"
 }
 
 init_partition_data() {
     [[ -v PARTITIONS[@] ]] && return 0
-    eval "$(lsblk -lnpo TYPE,PATH,SIZE,PARTTYPE,FSTYPE | awk '/part/ {
-        printf "PARTITIONS+=(%s)\n", $2;
-        printf "PARTITION_SIZES[%s]=%s\n", $2, $3;
-        printf "PARTITION_GUIDS[%s]=%s\n", $2, $4;
-        printf "PARTITION_FILESYSTEMS[%s]=%s\n", $2, $5;
-    }')"
+    local lsblk_output
+    lsblk_output=$(lsblk -lnpo TYPE,PATH,SIZE,PARTTYPE,FSTYPE)
+    mapfile -t PARTITIONS < <(echo "$lsblk_output" | awk '/part/ {print $2}')
+    while read -r key value; do PARTITION_SIZES[$key]=$value; done < <(echo "$lsblk_output" | awk '/part/ {print $2,$3}')
+    while read -r key value; do PARTITION_GUIDS[$key]=$value; done < <(echo "$lsblk_output" | awk '/part/ {print $2,$4}')
+    while read -r key value; do PARTITION_FILESYSTEMS[$key]=$value; done < <(echo "$lsblk_output" | awk '/part/ {print $2,$5}')
 }
 
 init_config_filesystems() {

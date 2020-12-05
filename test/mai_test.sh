@@ -4,6 +4,12 @@
 
 set +e
 
+oneTimeSetUp() {
+    log() {
+        return
+    }
+}
+
 test_generate_file() { (
     filepath="${SHUNIT_TMPDIR}/test_generate_file"
 
@@ -24,7 +30,13 @@ test_is_device_mounted_mounted_device() { (
     assertTrue $?
 ); }
 
-test_get_default_filesystem_type_unkown_guid() { (
+test_get_default_filesystem_type_all_known_guid() { (
+    for guid in "${!GUID_DEFAULT_FILESYSTEM[@]}"; do
+        assertContains "GUID: $guid" "(vfat swap)" "$(get_default_filesystem_type "$guid")"
+    done
+); }
+
+test_get_default_filesystem_type_unknown_guid() { (
     assertEquals "ext4" "$(get_default_filesystem_type "unkown_guid")"
 ); }
 
@@ -46,6 +58,55 @@ part /dev/sda2  15.4G 0fc63daf-8483-4772-8e79-3d69d8477de4 ext4"
     assertEquals "15.4G" "${PARTITION_SIZES["/dev/sda2"]}"
     assertEquals "0fc63daf-8483-4772-8e79-3d69d8477de4" "${PARTITION_GUIDS["/dev/sda2"]}"
     assertEquals "ext4" "${PARTITION_FILESYSTEMS["/dev/sda2"]}"
+); }
+
+test_init_partition_data_does_nothing_if_CONFIG_FILESYSTEMS_already_initialized() { (
+    lsblk() {
+        echo "disk /dev/sda   476.9G
+part /dev/sda1   550M c12a7328-f81f-11d2-ba4b-00a0c93ec93b vfat
+part /dev/sda2  15.4G 0fc63daf-8483-4772-8e79-3d69d8477de4 ext4"
+    }
+    PARTITIONS=("bla")
+
+    init_partition_data
+
+    assertEquals "bla" "${PARTITIONS[*]}"
+    assertNull "${PARTITION_SIZES[*]}"
+    assertNull "${PARTITION_GUIDS[*]}"
+    assertNull "${PARTITION_FILESYSTEMS[*]}"
+); }
+
+test_init_config_filesystems_does_nothing_if_CONFIG_FILESYSTEMS_already_initialized() { (
+    PARTITIONS=("/dev/sda1")
+    PARTITION_GUIDS["/dev/sda1"]="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+    PARTITION_FILESYSTEMS["/dev/sda1"]="vfat"
+    CONFIG_FILESYSTEMS["bla"]=blub
+
+    init_config_filesystems
+
+    assertEquals "bla" "${!CONFIG_FILESYSTEMS[@]}"
+); }
+
+test_init_config_filesystems_CONFIG_FILESYSTEMS_is_empty_if_partition_already_has_a_filesystem() { (
+    PARTITIONS=("/dev/sda1")
+    PARTITION_GUIDS["/dev/sda1"]="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+    PARTITION_FILESYSTEMS["/dev/sda1"]="vfat"
+
+    init_config_filesystems
+
+    assertEquals "/dev/sda1" "${!CONFIG_FILESYSTEMS[@]}"
+    assertNull "${CONFIG_FILESYSTEMS["/dev/sda1"]}"
+); }
+
+test_init_config_filesystems_CONFIG_FILESYSTEMS_is_set_to_default_if_partition_has_no_filesystem() { (
+    PARTITIONS=("/dev/sda1")
+    PARTITION_GUIDS["/dev/sda1"]="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+    PARTITION_FILESYSTEMS["/dev/sda1"]=""
+
+    init_config_filesystems
+
+    assertEquals "/dev/sda1" "${!CONFIG_FILESYSTEMS[@]}"
+    assertEquals "vfat" "${CONFIG_FILESYSTEMS["/dev/sda1"]}"
 ); }
 
 test_get_root_partition_device() { (
