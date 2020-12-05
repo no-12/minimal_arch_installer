@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 declare -r PROJECT_DIR
+declare -r TEST_DIR="${PROJECT_DIR}/test/"
 declare -r SHUNIT2_BASE_PATH="${PROJECT_DIR}/shunit2"
 declare -r SHUNIT2_PATH="${SHUNIT2_BASE_PATH}/shunit2"
 declare -r shunit2_version="2.1.8"
@@ -16,6 +17,14 @@ fi
 export PROJECT_DIR
 export SHUNIT2_PATH
 
-for testfile in "${PROJECT_DIR}"/test/*_test.sh; do
-    bash "$testfile"
+declare -a FAILING_TESTS
+
+for testfile in "${TEST_DIR}"*.sh; do
+    echo -e "\\e[44mTestfile: $testfile\e[0m" 1>&2
+    bash "$testfile" || FAILING_TESTS+=("${testfile#$TEST_DIR}")
 done
+
+if [[ -v FAILING_TESTS[@] ]]; then
+    echo -e "\\e[41mFailing tests: ${FAILING_TESTS[*]}\e[0m" 1>&2
+    exit 1
+fi
