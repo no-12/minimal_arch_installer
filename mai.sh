@@ -51,14 +51,14 @@ generate_file() {
     local path=$1
     local content=$2
     print_h1 "Generate $path"
-    echo -e "$content" | tee /mnt"$path"
+    echo -e "$content" | tee "$path"
 }
 
-check_if_device_is_mounted() {
+is_device_mounted() {
     local disk="$1"
-    if grep -qs "$disk" /proc/mounts; then
+    if ! grep -qs "$disk" /proc/mounts; then
         log_error "$disk is mounted"
-        exit 1
+        return 1
     fi
 }
 
@@ -234,8 +234,8 @@ generate_fstab() {
 
 generate_host_files() {
     print_h0 "Generate host files"
-    generate_file /etc/hostname "${CONFIG[HOSTNAME]}\\n"
-    generate_file /etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
+    generate_file /mnt /mnt/etc/hostname "${CONFIG[HOSTNAME]}\\n"
+    generate_file /mnt /mnt/etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
 }
 
 enable_networkmanager_service() {
@@ -251,8 +251,8 @@ set_timezone() {
 
 set_locale() {
     print_h0 "Set locale"
-    generate_file /etc/locale.gen "en_US.UTF-8 UTF-8\\n"
-    generate_file /etc/locale.conf "LANG=en_US.UTF-8\\n"
+    generate_file /mnt /mnt/etc/locale.gen "en_US.UTF-8 UTF-8\\n"
+    generate_file /mnt /mnt/etc/locale.conf "LANG=en_US.UTF-8\\n"
     arch-chroot /mnt locale-gen
 }
 
@@ -450,7 +450,7 @@ dialog_create_default_partition_layout() {
     local swap_size=$3
     local root_size=$4
 
-    check_if_device_is_mounted "$disk"
+    is_device_mounted "$disk" && exit 1
 
     {
         echo -e "XXX\n0\nCreate new GPT on $disk\nXXX"
