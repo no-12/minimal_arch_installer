@@ -234,8 +234,8 @@ generate_fstab() {
 
 generate_host_files() {
     print_h0 "Generate host files"
-    generate_file /mnt /mnt/etc/hostname "${CONFIG[HOSTNAME]}\\n"
-    generate_file /mnt /mnt/etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
+    generate_file /mnt/etc/hostname "${CONFIG[HOSTNAME]}\\n"
+    generate_file /mnt/etc/hosts "127.0.0.1\\tlocalhost\\n::1\\t\\tlocalhost\\n"
 }
 
 enable_networkmanager_service() {
@@ -251,8 +251,8 @@ set_timezone() {
 
 set_locale() {
     print_h0 "Set locale"
-    generate_file /mnt /mnt/etc/locale.gen "en_US.UTF-8 UTF-8\\n"
-    generate_file /mnt /mnt/etc/locale.conf "LANG=en_US.UTF-8\\n"
+    generate_file /mnt/etc/locale.gen "en_US.UTF-8 UTF-8\\n"
+    generate_file /mnt/etc/locale.conf "LANG=en_US.UTF-8\\n"
     arch-chroot /mnt locale-gen
 }
 
