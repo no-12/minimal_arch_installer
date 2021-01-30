@@ -5,7 +5,7 @@ declare -r TITLE="Minimal Arch Installer"
 declare -ra DIALOG_SIZE=(30 78)
 declare -r BACK_BUTTON_TEXT=Back
 declare -rA "GUID_MOINTPOINTS=(
-    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/boot
+    [c12a7328-f81f-11d2-ba4b-00a0c93ec93b]=/efi
     [0657fd6d-a4ab-43c4-84e5-0933c84b4f4f]=SWAP
     [4f68bce3-e8cd-4db1-96e7-fbcaf984b709]=/
     [933ac7e1-2eb4-4f13-b844-0e14e2aef915]=/home
@@ -211,7 +211,7 @@ mount_partitions() {
 
 install_base_packages() {
     print_h0 "Install base packages"
-    eval "pacstrap /mnt base linux linux-firmware sudo inetutils networkmanager ${CONFIG[ADDITIONAL_PACKAGES]}"
+    eval "pacstrap /mnt base linux linux-firmware grub efibootmgr sudo inetutils networkmanager ${CONFIG[ADDITIONAL_PACKAGES]}"
 }
 
 swapon_all_swap_partitions() {
@@ -272,30 +272,9 @@ EOF
 
 install_bootloader() {
     print_h0 "Install bootloader"
-    arch-chroot /mnt bootctl --path=/boot install
-
-    local root_partition_device
-    root_partition_device=$(get_root_partition_device)
-    local root_partition_uuid
-    root_partition_uuid=$(blkid -s PARTUUID -o value "$root_partition_device")
-
-    print_h1 "Generate /boot/loader/entries/arch.conf"
-    tee /mnt/boot/loader/entries/arch.conf <<EOF
-title   Arch Linux
-linux   /vmlinuz-linux
-initrd  /initramfs-linux.img
-options root=PARTUUID=${root_partition_uuid} rw
-
-EOF
-
-    print_h1 "Generate /boot/loader/loader.conf"
-    tee /mnt/boot/loader/loader.conf <<EOF
-default arch
-timeout 0
-console-mode max
-editor no
-
-EOF
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory="${GUID_MOINTPOINTS["c12a7328-f81f-11d2-ba4b-00a0c93ec93b"]}" --bootloader-id=GRUB
+    print_h1 "Generate /boot/grub/grub.cfg"
+    arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 }
 
 create_user() {
