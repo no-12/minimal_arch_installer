@@ -4,7 +4,7 @@ self contained installer written in bash
 
 boot the Arch Linux ISO and run the wizard with:
 ```bash
-wget https://raw.githubusercontent.com/no-12/minimal_arch_installer/master/mai.sh && bash mai.sh
+curl -o mai.sh https://raw.githubusercontent.com/no-12/minimal_arch_installer/main/mai.sh && bash mai.sh
 ```
 
 ## Test Minimal Arch Installer in VirtualBox
@@ -20,5 +20,5 @@ python -m http.server
 ```
 Run the following command on the vm
 ```bash
-wget 10.0.2.2:8000/mai.sh && bash mai.sh
+curl -o mai.sh 10.0.2.2:8000/mai.sh && bash mai.sh
 ```
